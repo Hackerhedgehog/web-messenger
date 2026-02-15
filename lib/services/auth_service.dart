@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
 class AuthService {
+  /// Set to true to require email verification before sign-in.
+  static const bool requireEmailVerification = false;
+
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // Get current user
@@ -22,7 +25,9 @@ class AuthService {
         password: password,
       );
       final user = credential.user;
-      if (user != null && !user.emailVerified) {
+      if (requireEmailVerification &&
+          user != null &&
+          !user.emailVerified) {
         await _auth.signOut();
         throw 'Please verify your email before signing in. Check your inbox for the verification link.';
       }
@@ -46,7 +51,9 @@ class AuthService {
         password: password,
       );
       final user = credential.user;
-      if (user != null && !user.emailVerified) {
+      if (requireEmailVerification &&
+          user != null &&
+          !user.emailVerified) {
         await user.sendEmailVerification();
       }
       return credential;

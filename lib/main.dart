@@ -58,12 +58,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
         final user = snapshot.data;
         final userProvider = Provider.of<UserProvider>(context, listen: false);
 
-        // If user is authenticated, load their profile data
+        // If user is authenticated, listen to their profile for real-time updates
         if (user != null) {
-          // Only load if we don't already have the user data
           if (userProvider.currentUser == null ||
               userProvider.currentUser?.userId != user.uid) {
-            userProvider.loadUserData(user.uid);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              userProvider.listenToUserProfile(user.uid);
+            });
           }
           return const HomeScreen();
         } else {

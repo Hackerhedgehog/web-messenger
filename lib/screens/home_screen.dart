@@ -7,6 +7,7 @@ import '../services/firestore_service.dart';
 import '../widgets/reauthenticate_dialog.dart';
 import '../widgets/user_data_gate.dart';
 import 'account_tab.dart';
+import 'chats_tab.dart';
 import 'home_tab.dart';
 import 'invites_tab.dart';
 import 'login_screen.dart';
@@ -28,18 +29,12 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
   }
 
   void _onTabChanged() {
-    if (_tabController.index == 2) {
-      final userProvider = Provider.of<UserProvider>(context, listen: false);
-      final userId = _authService.currentUser?.uid;
-      if (userId != null) {
-        userProvider.loadUserData(userId);
-      }
-    }
+    if (mounted) setState(() {});
   }
 
   @override
@@ -227,20 +222,62 @@ class _HomeScreenState extends State<HomeScreen>
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TabBar(
-                    controller: _tabController,
-                    tabs: const [
-                      Tab(text: 'Home', icon: Icon(Icons.home)),
-                      Tab(text: 'Invites', icon: Icon(Icons.mail)),
-                      Tab(text: 'Account', icon: Icon(Icons.person)),
-                    ],
+                  StreamBuilder<List<String>>(
+                    stream: _firestoreService.inviteSendersStream(user.userId),
+                    builder: (context, inviteSnapshot) {
+                      return StreamBuilder<List<String>>(
+                        stream: _firestoreService
+                            .connectionsStream(user.userId),
+                        builder: (context, connectionSnapshot) {
+                          final inviteCount =
+                              inviteSnapshot.data?.length ?? 0;
+                          final connectionCount =
+                              connectionSnapshot.data?.length ?? 0;
+                          final isOnInvitesTab = _tabController.index == 2;
+                          final isOnChatsTab = _tabController.index == 1;
+                          final showInviteBadge =
+                              inviteCount > 0 && !isOnInvitesTab;
+                          final showChatBadge =
+                              connectionCount > 0 && !isOnChatsTab;
+
+                          return TabBar(
+                            controller: _tabController,
+                            tabs: [
+                              const Tab(
+                                text: 'Home',
+                                icon: Icon(Icons.home),
+                              ),
+                              Tab(
+                                text: 'Chats',
+                                icon: Badge(
+                                  isLabelVisible: showChatBadge,
+                                  child: const Icon(Icons.chat),
+                                ),
+                              ),
+                              Tab(
+                                text: 'Invites',
+                                icon: Badge(
+                                  isLabelVisible: showInviteBadge,
+                                  child: const Icon(Icons.mail),
+                                ),
+                              ),
+                              const Tab(
+                                text: 'Account',
+                                icon: Icon(Icons.person),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
                   ),
                   Expanded(
                     child: TabBarView(
                       controller: _tabController,
                       children: [
                         HomeTab(user: user),
-                        const InvitesTab(),
+                        ChatsTab(user: user),
+                        InvitesTab(user: user),
                         AccountTab(
                           user: user,
                           onLogout: _handleLogout,

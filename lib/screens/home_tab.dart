@@ -27,6 +27,36 @@ class _HomeTabState extends State<HomeTab> {
     super.dispose();
   }
 
+  Future<void> _sendInvite(User receiver) async {
+    try {
+      final result = await _firestoreService.sendInvite(
+        senderUserId: widget.user.userId,
+        receiverUserId: receiver.userId,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result == 'connected'
+                  ? 'You\'re now connected with ${receiver.username}!'
+                  : 'Invite sent to ${receiver.username}',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send invite: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _searchUser() async {
     final query = _searchController.text.trim();
     if (query.isEmpty) {
@@ -146,9 +176,7 @@ class _HomeTabState extends State<HomeTab> {
             const SizedBox(height: 12),
             _UserSearchResultTile(
               user: _foundUser!,
-              onInvite: () {
-                // TODO: Implement invite request functionality
-              },
+              onInvite: () => _sendInvite(_foundUser!),
             ),
           ],
         ],

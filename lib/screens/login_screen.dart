@@ -46,7 +46,7 @@ class _LoginScreenState extends State<LoginScreen> {
             context,
             listen: false,
           );
-          await userProvider.loadUserData(userCredential!.user!.uid);
+          userProvider.listenToUserProfile(userCredential!.user!.uid);
 
           if (mounted) {
             Navigator.of(context).pushAndRemoveUntil(
