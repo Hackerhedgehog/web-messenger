@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/user_provider.dart';
+import '../models/connection_info.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
+import '../services/storage_service.dart';
 import '../widgets/reauthenticate_dialog.dart';
 import '../widgets/user_data_gate.dart';
 import 'account_tab.dart';
@@ -26,6 +28,11 @@ class _HomeScreenState extends State<HomeScreen>
 
   late TabController _tabController;
 
+  int _inviteCount = 0;
+  int _connectionCount = 0;
+  int _lastSeenInviteCount = 0;
+  int _lastSeenConnectionCount = 0;
+
   @override
   void initState() {
     super.initState();
@@ -34,7 +41,27 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onTabChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (_tabController.index == 1) {
+      _lastSeenConnectionCount = _connectionCount;
+    } else if (_tabController.index == 2) {
+      _lastSeenInviteCount = _inviteCount;
+    }
+    setState(() {});
+  }
+
+  void _onInviteCountChanged(int count) {
+    if (_inviteCount != count) {
+      _inviteCount = count;
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _onConnectionCountChanged(int count) {
+    if (_connectionCount != count) {
+      _connectionCount = count;
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -102,6 +129,8 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final userProvider = Provider.of<UserProvider>(context, listen: false);
       final userId = userProvider.currentUser?.userId;
+      final profilePictureUrl =
+          userProvider.currentUser?.profilePictureUrl;
 
       if (userId == null) {
         throw 'No user data available';
@@ -122,7 +151,11 @@ class _HomeScreenState extends State<HomeScreen>
 
           // Show password dialog for re-authentication (guard context after async)
           if (!mounted) return;
-          final password = await showReauthenticateDialog(context);
+          final password = await showReauthenticateDialog(
+            context,
+            message:
+                'For security, please enter your password to confirm account deletion.',
+          );
 
           if (password == null || !mounted) {
             // User cancelled password dialog
@@ -159,8 +192,11 @@ class _HomeScreenState extends State<HomeScreen>
         }
       }
 
-      // Only delete from Firestore AFTER successful Auth deletion
-      await _firestoreService.deleteUserProfile(userId);
+      // Delete profile picture from Storage and clean up Firestore (connections,
+      // invites, user profile) AFTER successful Auth deletion
+      final storageService = StorageService();
+      await storageService.deleteProfilePictureByUrl(profilePictureUrl);
+      await _firestoreService.deleteUserWithConnectionsCleanup(userId);
 
       // Clear user data
       userProvider.clearUser();
@@ -225,20 +261,28 @@ class _HomeScreenState extends State<HomeScreen>
                   StreamBuilder<List<String>>(
                     stream: _firestoreService.inviteSendersStream(user.userId),
                     builder: (context, inviteSnapshot) {
-                      return StreamBuilder<List<String>>(
+                      final inviteCount =
+                          inviteSnapshot.data?.length ?? 0;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _onInviteCountChanged(inviteCount);
+                      });
+                      return StreamBuilder<List<ConnectionInfo>>(
                         stream: _firestoreService
-                            .connectionsStream(user.userId),
+                            .connectionsForUserStream(user.userId),
                         builder: (context, connectionSnapshot) {
-                          final inviteCount =
-                              inviteSnapshot.data?.length ?? 0;
                           final connectionCount =
                               connectionSnapshot.data?.length ?? 0;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            _onConnectionCountChanged(connectionCount);
+                          });
                           final isOnInvitesTab = _tabController.index == 2;
                           final isOnChatsTab = _tabController.index == 1;
-                          final showInviteBadge =
-                              inviteCount > 0 && !isOnInvitesTab;
-                          final showChatBadge =
-                              connectionCount > 0 && !isOnChatsTab;
+                          final showInviteBadge = _inviteCount >
+                                  _lastSeenInviteCount &&
+                              !isOnInvitesTab;
+                          final showChatBadge = _connectionCount >
+                                  _lastSeenConnectionCount &&
+                              !isOnChatsTab;
 
                           return TabBar(
                             controller: _tabController,

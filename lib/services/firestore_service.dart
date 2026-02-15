@@ -1,4 +1,10 @@
+import 'dart:math';
+
+import 'package:async/async.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+
+import '../models/connection_info.dart';
+import '../models/message_model.dart';
 
 class _InviteEntry {
   _InviteEntry(this.senderId, this.timestamp);
@@ -112,6 +118,18 @@ class FirestoreService {
     }
   }
 
+  /// Returns true if [username] can be used by [userId] (available or already theirs).
+  Future<bool> isUsernameAvailableForUser(String username, String userId) async {
+    final available = await isUsernameAvailable(username);
+    if (available) return true;
+    final existing = await _firestore
+        .collection('users')
+        .where('username', isEqualTo: username)
+        .limit(1)
+        .get();
+    return existing.docs.isNotEmpty && existing.docs.first.id == userId;
+  }
+
   /// Sends an invite request from [senderUserId] to [receiverUserId].
   /// If receiver already has a pending invite from sender (mutual), creates
   /// connection instead and removes the invite.
@@ -210,15 +228,36 @@ class FirestoreService {
     transaction.set(connectionRef, {
       'name': '',
       'lastMessage': now,
-      'typing': {userId1: false, userId2: false},
     });
 
     transaction.set(connectionRef.collection('participants').doc(userId1), {
       'isTyping': false,
+      'lastSeen': now,
     });
     transaction.set(connectionRef.collection('participants').doc(userId2), {
       'isTyping': false,
+      'lastSeen': now,
     });
+  }
+
+  /// Updates the participant's lastSeen timestamp. Call when user opens a chat
+  /// or when they receive/send a message while the chat is open.
+  Future<void> updateParticipantLastSeen({
+    required String connectionId,
+    required String userId,
+  }) async {
+    try {
+      await _firestore
+          .collection('connections')
+          .doc(connectionId)
+          .collection('participants')
+          .doc(userId)
+          .set({
+        'lastSeen': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      // Silently ignore - participant may have left the connection
+    }
   }
 
   /// Accepts an invite: removes it from receiver and adds both to connections.
@@ -302,7 +341,233 @@ class FirestoreService {
     });
   }
 
+  /// Stream of connections for the Chats tab, sorted by lastMessage (newest first).
+  /// Includes both 1:1 connections and group connections.
+  Stream<List<ConnectionInfo>> connectionsForUserStream(String userId) {
+    return _firestore.collection('users').doc(userId).snapshots().asyncExpand(
+      (userDoc) {
+        final data = userDoc.data();
+        final connections = data?['connections'] as Map? ?? {};
+        final groupConnections =
+            data?['groupConnections'] as Map? ?? {};
+
+        final connectionIds = <String>[];
+        final groupConnectionIds =
+            groupConnections.keys.map((e) => e.toString()).toList();
+
+        final otherUserIds =
+            connections.keys.map((e) => e.toString()).toList();
+        for (final o in otherUserIds) {
+          connectionIds.add(connectionIdFromUsers(userId, o));
+        }
+        connectionIds.addAll(groupConnectionIds);
+
+        if (connectionIds.isEmpty) {
+          return Stream.value(<ConnectionInfo>[]);
+        }
+
+        final connectionStreams = connectionIds
+            .map((id) =>
+                _firestore.collection('connections').doc(id).snapshots())
+            .toList();
+
+        return StreamGroup.merge<Object?>([
+          Stream.value(null),
+          ...connectionStreams,
+        ]).asyncMap((_) => _fetchAllConnectionInfos(
+              userId,
+              connections,
+              groupConnections,
+            ));
+      },
+    );
+  }
+
+  Future<List<ConnectionInfo>> _fetchAllConnectionInfos(
+    String userId,
+    Map connections,
+    Map groupConnections,
+  ) async {
+    final infos = <ConnectionInfo>[];
+
+    for (final otherId in connections.keys) {
+      final otherIdStr = otherId.toString();
+      final connId = connectionIdFromUsers(userId, otherIdStr);
+      final info = await _fetchSingleConnectionInfo(
+        userId,
+        connId,
+        otherIdStr,
+        null,
+      );
+      if (info != null) infos.add(info);
+    }
+
+    for (final groupId in groupConnections.keys) {
+      final groupIdStr = groupId.toString();
+      if (!groupIdStr.startsWith('group_')) continue;
+      final info = await _fetchGroupConnectionInfo(userId, groupIdStr);
+      if (info != null) infos.add(info);
+    }
+
+    infos.sort((a, b) {
+      if (a.lastMessage == null && b.lastMessage == null) return 0;
+      if (a.lastMessage == null) return 1;
+      if (b.lastMessage == null) return -1;
+      return b.lastMessage!.compareTo(a.lastMessage!);
+    });
+    return infos;
+  }
+
+  Future<ConnectionInfo?> _fetchSingleConnectionInfo(
+    String userId,
+    String connId,
+    String otherId,
+    Map<String, dynamic>? connData,
+  ) async {
+    final connDoc =
+        await _firestore.collection('connections').doc(connId).get();
+    if (!connDoc.exists) return null;
+
+    final data = connData ?? connDoc.data() ?? {};
+    final name = data['name'] as String? ?? '';
+    final lastMessageTs = data['lastMessage'];
+    final lastMessage = lastMessageTs is Timestamp
+        ? lastMessageTs.toDate()
+        : null;
+
+    final participantsSnapshot =
+        await connDoc.reference.collection('participants').get();
+    final otherStillConnected =
+        participantsSnapshot.docs.any((d) => d.id == otherId);
+
+    String displayName = name;
+    if (displayName.isEmpty && otherStillConnected) {
+      final userData = await getUserProfile(otherId);
+      displayName = userData?['username'] as String? ?? otherId;
+    } else if (displayName.isEmpty) {
+      displayName = 'Unknown';
+    }
+
+    return ConnectionInfo(
+      connectionId: connId,
+      otherUserId: otherId,
+      name: displayName,
+      lastMessage: lastMessage,
+      otherParticipantStillConnected: otherStillConnected,
+    );
+  }
+
+  Future<ConnectionInfo?> _fetchGroupConnectionInfo(
+    String userId,
+    String groupConnectionId,
+  ) async {
+    final connDoc = await _firestore
+        .collection('connections')
+        .doc(groupConnectionId)
+        .get();
+    if (!connDoc.exists) return null;
+
+    final data = connDoc.data() ?? {};
+    final name = data['name'] as String? ?? 'Unnamed group';
+    final lastMessageTs = data['lastMessage'];
+    final lastMessage = lastMessageTs is Timestamp
+        ? lastMessageTs.toDate()
+        : null;
+
+    final participantsSnapshot =
+        await connDoc.reference.collection('participants').get();
+    final participantIds =
+        participantsSnapshot.docs.map((d) => d.id).toList();
+
+    return ConnectionInfo(
+      connectionId: groupConnectionId,
+      otherUserId: '',
+      name: name,
+      lastMessage: lastMessage,
+      otherParticipantStillConnected: true,
+      isGroup: true,
+      participantIds: participantIds,
+    );
+  }
+
+  /// Returns user IDs the current user is connected with (1:1 only).
+  Future<List<String>> getConnectedUserIds(String userId) async {
+    final doc = await _firestore.collection('users').doc(userId).get();
+    if (!doc.exists) return [];
+    final data = doc.data() ?? {};
+    final connections = data['connections'];
+    if (connections is! Map) return [];
+    return connections.keys.map((e) => e.toString()).toList();
+  }
+
+  /// Creates a group connection. [creatorUserId] creates the group with
+  /// [selectedUserIds] (must be connected with creator). [name] is required.
+  Future<String> createGroupConnection({
+    required String creatorUserId,
+    required List<String> selectedUserIds,
+    required String name,
+  }) async {
+    if (name.trim().isEmpty) {
+      throw 'Group name is required';
+    }
+    if (selectedUserIds.isEmpty) {
+      throw 'Select at least one participant';
+    }
+
+    final allParticipantIds = {creatorUserId, ...selectedUserIds}.toList();
+    if (allParticipantIds.length < 2) {
+      throw 'Select at least one other participant';
+    }
+
+    final connectedIds = await getConnectedUserIds(creatorUserId);
+    for (final id in selectedUserIds) {
+      if (!connectedIds.contains(id)) {
+        throw 'All selected users must be connected with you';
+      }
+    }
+
+    final groupId = 'group_${DateTime.now().millisecondsSinceEpoch}_'
+        '${Random().nextInt(999999)}';
+
+    try {
+      final now = FieldValue.serverTimestamp();
+      final connectionRef =
+          _firestore.collection('connections').doc(groupId);
+
+      await _firestore.runTransaction((transaction) async {
+        transaction.set(connectionRef, {
+          'name': name.trim(),
+          'lastMessage': now,
+          'type': 'group',
+        });
+
+        for (final pid in allParticipantIds) {
+          transaction.set(
+            connectionRef.collection('participants').doc(pid),
+            {'isTyping': false, 'lastSeen': now},
+          );
+        }
+
+        for (final pid in allParticipantIds) {
+          transaction.set(
+            _firestore.collection('users').doc(pid),
+            {
+              'groupConnections.$groupId': now,
+              'updatedAt': now,
+            },
+            SetOptions(merge: true),
+          );
+        }
+      });
+
+      return groupId;
+    } catch (e) {
+      throw 'Failed to create group: $e';
+    }
+  }
+
   /// Stream of connected user IDs for the given user, newest first.
+  /// Used for badge count.
   Stream<List<String>> connectionsStream(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().map((doc) {
       if (!doc.exists) return <String>[];
@@ -326,6 +591,73 @@ class FirestoreService {
     });
   }
 
+  /// Removes a connection for [currentUserId]. Removes from participants and
+  /// current user's connections map. Does NOT remove from the other user's map
+  /// so they still see it. Sets connection name to removed user's name.
+  /// Deletes connections/{connectionID} when the last participant leaves.
+  Future<void> removeConnection({
+    required String currentUserId,
+    required String otherUserId,
+  }) async {
+    try {
+      final connectionId = connectionIdFromUsers(currentUserId, otherUserId);
+      final connectionRef =
+          _firestore.collection('connections').doc(connectionId);
+
+      final currentUserProfile = await getUserProfile(currentUserId);
+      final removedUserName =
+          currentUserProfile?['username'] as String? ?? currentUserId;
+
+      await _firestore.runTransaction((transaction) async {
+        transaction.delete(
+          connectionRef.collection('participants').doc(currentUserId),
+        );
+        transaction.update(
+          _firestore.collection('users').doc(currentUserId),
+          {
+            'connections.$otherUserId': FieldValue.delete(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+        transaction.update(
+          connectionRef,
+          {
+            'name': removedUserName,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+      });
+
+      final participantsSnapshot =
+          await connectionRef.collection('participants').get();
+      if (participantsSnapshot.docs.isEmpty) {
+        await _deleteCollection(connectionRef.collection('participants'));
+        await _deleteCollection(connectionRef.collection('messages'));
+        await connectionRef.delete();
+      }
+    } catch (e) {
+      throw 'Failed to remove connection: $e';
+    }
+  }
+
+  Future<void> _deleteCollection(CollectionReference collection) async {
+    const batchSize = 100;
+    QuerySnapshot snapshot =
+        await collection.orderBy(FieldPath.documentId).limit(batchSize).get();
+
+    while (snapshot.docs.isNotEmpty) {
+      final batch = _firestore.batch();
+      for (final doc in snapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+      snapshot = await collection
+          .orderBy(FieldPath.documentId)
+          .limit(batchSize)
+          .get();
+    }
+  }
+
   // Delete user profile from Firestore
   Future<void> deleteUserProfile(String userId) async {
     try {
@@ -333,5 +665,253 @@ class FirestoreService {
     } catch (e) {
       throw 'Failed to delete user profile: $e';
     }
+  }
+
+  /// Removes [userId] from all their connections (1:1 and groups).
+  /// Call before deleting the user profile. Requires the user doc to exist.
+  Future<void> removeUserFromAllConnections(String userId) async {
+    final userData = await getUserProfile(userId);
+    if (userData == null) return;
+
+    final connections = userData['connections'];
+    if (connections is Map) {
+      final otherUserIds = connections.keys.map((e) => e.toString()).toList();
+      for (final otherId in otherUserIds) {
+        await removeConnection(
+          currentUserId: userId,
+          otherUserId: otherId,
+        );
+      }
+    }
+
+    final groupConnections = userData['groupConnections'];
+    if (groupConnections is Map) {
+      final groupIds =
+          groupConnections.keys.map((e) => e.toString()).toList();
+      for (final groupId in groupIds) {
+        await removeUserFromGroup(userId: userId, groupConnectionId: groupId);
+      }
+    }
+  }
+
+  /// Removes a user from a group connection.
+  Future<void> removeUserFromGroup({
+    required String userId,
+    required String groupConnectionId,
+  }) async {
+    try {
+      final connectionRef =
+          _firestore.collection('connections').doc(groupConnectionId);
+      final participantRef =
+          connectionRef.collection('participants').doc(userId);
+
+      await _firestore.runTransaction((transaction) async {
+        transaction.delete(participantRef);
+        transaction.update(
+          _firestore.collection('users').doc(userId),
+          {
+            'groupConnections.$groupConnectionId': FieldValue.delete(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+      });
+
+      final participantsSnapshot =
+          await connectionRef.collection('participants').get();
+      if (participantsSnapshot.docs.isEmpty) {
+        await _deleteCollection(connectionRef.collection('participants'));
+        await _deleteCollection(connectionRef.collection('messages'));
+        await connectionRef.delete();
+      }
+    } catch (e) {
+      // Silently ignore - group may not exist
+    }
+  }
+
+  /// Removes invites sent by [userId] from all other users' invite maps.
+  /// Call before deleting the user profile.
+  Future<void> removeInvitesSentByUser(String userId) async {
+    final usersSnapshot = await _firestore.collection('users').get();
+    final batch = _firestore.batch();
+    var hasWrites = false;
+
+    for (final doc in usersSnapshot.docs) {
+      if (doc.id == userId) continue;
+      final data = doc.data();
+      final invites = data['invites'];
+      if (invites is Map && invites.containsKey(userId)) {
+        batch.update(doc.reference, {
+          'invites.$userId': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        hasWrites = true;
+      }
+    }
+
+    if (hasWrites) await batch.commit();
+  }
+
+  /// Full cleanup when a user deletes their account: removes from all
+  /// connections, removes invites they sent, then deletes the user profile.
+  /// Call after Firebase Auth user is deleted. Profile picture should be
+  /// deleted separately via StorageService.
+  Future<void> deleteUserWithConnectionsCleanup(String userId) async {
+    await removeUserFromAllConnections(userId);
+    await removeInvitesSentByUser(userId);
+    await deleteUserProfile(userId);
+  }
+
+  /// Sends a message in a connection. Updates connection lastMessage.
+  Future<void> sendMessage({
+    required String connectionId,
+    required String senderId,
+    required String text,
+  }) async {
+    try {
+      final connectionRef =
+          _firestore.collection('connections').doc(connectionId);
+      final messagesRef = connectionRef.collection('messages');
+
+      final now = FieldValue.serverTimestamp();
+      await _firestore.runTransaction((transaction) async {
+        final messageRef = messagesRef.doc();
+        transaction.set(messageRef, {
+          'senderId': senderId,
+          'text': text.trim(),
+          'createdAt': now,
+        });
+        transaction.update(connectionRef, {
+          'lastMessage': now,
+          'updatedAt': now,
+        });
+        transaction.set(
+          connectionRef.collection('participants').doc(senderId),
+          {'lastSeen': now},
+          SetOptions(merge: true),
+        );
+      });
+    } catch (e) {
+      throw 'Failed to send message: $e';
+    }
+  }
+
+  /// Updates a message's text. Does not change createdAt.
+  Future<void> updateMessage({
+    required String connectionId,
+    required String messageId,
+    required String newText,
+  }) async {
+    try {
+      await _firestore
+          .collection('connections')
+          .doc(connectionId)
+          .collection('messages')
+          .doc(messageId)
+          .update({'text': newText.trim()});
+    } catch (e) {
+      throw 'Failed to update message: $e';
+    }
+  }
+
+  /// Deletes a message. Updates connection lastMessage if deleting the most
+  /// recent message.
+  Future<void> deleteMessage({
+    required String connectionId,
+    required String messageId,
+  }) async {
+    try {
+      final connectionRef =
+          _firestore.collection('connections').doc(connectionId);
+      final messagesRef = connectionRef.collection('messages');
+      final messageRef = messagesRef.doc(messageId);
+
+      final topSnapshot = await messagesRef
+          .orderBy('createdAt', descending: true)
+          .limit(2)
+          .get();
+
+      Object? nextLastMessage;
+      if (topSnapshot.docs.isNotEmpty &&
+          topSnapshot.docs.first.id == messageId &&
+          topSnapshot.docs.length > 1) {
+        nextLastMessage = topSnapshot.docs[1].data()['createdAt'];
+      }
+
+      await _firestore.runTransaction((transaction) async {
+        transaction.delete(messageRef);
+        if (nextLastMessage != null) {
+          transaction.update(connectionRef, {
+            'lastMessage': nextLastMessage,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      });
+    } catch (e) {
+      throw 'Failed to delete message: $e';
+    }
+  }
+
+  /// Fetches a page of messages, newest first. Returns messages and the
+  /// oldest document snapshot for pagination. Pass [startAfterDoc] to load
+  /// older messages.
+  Future<({List<Message> messages, DocumentSnapshot? oldestDoc})>
+      getMessagesPage({
+    required String connectionId,
+    int limit = 10,
+    DocumentSnapshot? startAfterDoc,
+  }) async {
+    final messagesRef = _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('messages');
+
+    Query<Map<String, dynamic>> query = messagesRef
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
+
+    if (startAfterDoc != null) {
+      query = query.startAfterDocument(startAfterDoc);
+    }
+
+    final snapshot = await query.get();
+    final messages =
+        snapshot.docs.map((d) => Message.fromFirestore(d)).toList();
+    final oldestDoc =
+        snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    return (messages: messages, oldestDoc: oldestDoc);
+  }
+
+  /// Stream of a participant's data (lastSeen, isTyping) for a connection.
+  Stream<Map<String, dynamic>?> participantStream({
+    required String connectionId,
+    required String userId,
+  }) {
+    return _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('participants')
+        .doc(userId)
+        .snapshots()
+        .map((doc) => doc.exists ? doc.data() : null);
+  }
+
+  /// Stream of new messages (createdAt > [after]). Use for real-time updates.
+  /// Pass null for [after] to get all messages (for new chats).
+  Stream<List<Message>> messagesStream({
+    required String connectionId,
+    DateTime? after,
+  }) {
+    var query = _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('messages')
+        .orderBy('createdAt', descending: false);
+
+    if (after != null) {
+      query = query.startAfter([Timestamp.fromDate(after)]);
+    }
+
+    return query.snapshots().map((snapshot) =>
+        snapshot.docs.map((d) => Message.fromFirestore(d)).toList());
   }
 }

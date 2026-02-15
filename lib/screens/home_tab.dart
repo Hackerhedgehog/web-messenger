@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
-import 'account_tab.dart';
+import '../widgets/profile_avatar.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key, required this.user});
@@ -198,9 +198,9 @@ class _UserSearchResultTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: ListTile(
-        leading: CircleAvatar(
+        leading: ProfileAvatar(
+          user: user,
           radius: 24,
-          backgroundImage: getProfileImageProvider(user),
         ),
         title: Text(user.username),
         trailing: FilledButton.icon(

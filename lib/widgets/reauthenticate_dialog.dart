@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
-/// Dialog that prompts for password for re-authentication (e.g. before account deletion).
+/// Dialog that prompts for password for re-authentication (e.g. before account deletion, email/password change).
 /// Returns the entered password, or null if cancelled.
-Future<String?> showReauthenticateDialog(BuildContext context) async {
+Future<String?> showReauthenticateDialog(
+  BuildContext context, {
+  String message = 'For security, please enter your password to continue.',
+}) async {
   final passwordController = TextEditingController();
   bool obscurePassword = true;
   String? errorMessage;
@@ -16,9 +19,7 @@ Future<String?> showReauthenticateDialog(BuildContext context) async {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              'For security, please enter your password to confirm account deletion.',
-            ),
+            Text(message),
             const SizedBox(height: 16),
             TextField(
               controller: passwordController,

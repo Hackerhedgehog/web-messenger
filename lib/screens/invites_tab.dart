@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
-import 'account_tab.dart';
+import '../widgets/profile_avatar.dart';
 
 class InvitesTab extends StatelessWidget {
   const InvitesTab({super.key, required this.user});
@@ -184,9 +184,9 @@ class _InviteTile extends StatelessWidget {
 
         return Card(
           child: ListTile(
-            leading: CircleAvatar(
+            leading: ProfileAvatar(
+              user: user,
               radius: 24,
-              backgroundImage: getProfileImageProvider(user),
             ),
             title: Text(user.username),
             trailing: Row(

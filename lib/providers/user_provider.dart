@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import '../models/user_model.dart';
+import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 
 class UserProvider extends ChangeNotifier {
+  final AuthService _authService = AuthService();
   final FirestoreService _firestoreService = FirestoreService();
   User? _currentUser;
   bool _isLoading = false;
@@ -37,10 +39,25 @@ class UserProvider extends ChangeNotifier {
     _profileSubscription = _firestoreService
         .userProfileStream(userId)
         .listen(
-          (userData) {
+          (userData) async {
             if (userData != null) {
               _currentUser = User.fromFirestore(userData, userId);
               _error = null;
+              // Sync Auth email to Firestore if user verified a new email
+              final authEmail = _authService.currentUser?.email;
+              final firestoreEmail = userData['email'] as String?;
+              if (authEmail != null &&
+                  firestoreEmail != null &&
+                  authEmail != firestoreEmail) {
+                try {
+                  await _firestoreService.updateUserProfile(
+                    userId: userId,
+                    data: {'email': authEmail},
+                  );
+                } catch (_) {
+                  // Ignore sync errors
+                }
+              }
             } else {
               _error = 'User profile not found';
               _currentUser = null;

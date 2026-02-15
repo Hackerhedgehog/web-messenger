@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/auth_service.dart';
+import '../utils/password_validator.dart';
 import '../services/firestore_service.dart';
 import '../services/storage_service.dart';
 
@@ -47,28 +48,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     }
     if (!_emailRegex.hasMatch(value)) {
       return 'Please enter a valid email address';
-    }
-    return null;
-  }
-
-  String? _validatePassword(String? value) {
-    if (value == null || value.isEmpty) {
-      return 'Please enter a password';
-    }
-    if (value.length < 8) {
-      return 'Password must be at least 8 characters';
-    }
-    if (!value.contains(RegExp(r'[a-z]'))) {
-      return 'Password must contain at least 1 lowercase letter';
-    }
-    if (!value.contains(RegExp(r'[A-Z]'))) {
-      return 'Password must contain at least 1 uppercase letter';
-    }
-    if (!value.contains(RegExp(r'[0-9]'))) {
-      return 'Password must contain at least 1 digit';
-    }
-    if (!value.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
-      return 'Password must contain at least 1 special character';
     }
     return null;
   }
@@ -177,10 +156,11 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           String? profilePictureUrl;
 
           if (_selectedImage != null) {
-            profilePictureUrl = await _storageService.uploadProfilePicture(
+            final result = await _storageService.uploadProfilePicture(
               image: _selectedImage!,
               userId: userId,
             );
+            profilePictureUrl = result.url;
           }
 
           // Create user profile in Firestore (while still signed in, so we have the uid)
@@ -363,7 +343,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                     ),
                     obscureText: _obscurePassword,
                     textInputAction: TextInputAction.next,
-                    validator: _validatePassword,
+                    validator: validatePassword,
                     autovalidateMode: AutovalidateMode.onUserInteraction,
                   ),
                   const SizedBox(height: 16),

@@ -105,6 +105,45 @@ class AuthService {
     }
   }
 
+  // Update user email. Sends verification email to new address; email updates after user clicks link.
+  // Throws 'requires-recent-login' if re-authentication is needed.
+  Future<void> updateEmail(String newEmail) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw 'No user is currently signed in.';
+      }
+      await user.verifyBeforeUpdateEmail(newEmail.trim());
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') {
+        throw 'requires-recent-login';
+      }
+      throw _handleAuthException(e);
+    } catch (e) {
+      if (e.toString() == 'requires-recent-login') rethrow;
+      throw e.toString();
+    }
+  }
+
+  // Update user password. Throws 'requires-recent-login' if re-authentication is needed.
+  Future<void> updatePassword(String newPassword) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw 'No user is currently signed in.';
+      }
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') {
+        throw 'requires-recent-login';
+      }
+      throw _handleAuthException(e);
+    } catch (e) {
+      if (e.toString() == 'requires-recent-login') rethrow;
+      throw e.toString();
+    }
+  }
+
   // Delete user account
   Future<void> deleteUser() async {
     try {
