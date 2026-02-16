@@ -1,11 +1,13 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/message_model.dart';
 import 'media_fullscreen_viewer.dart';
 
 /// Displays media (image or video) inside a message bubble.
-/// Tapping opens full-screen viewer.
+/// Videos show first-frame thumbnail with play icon. Tapping opens full-screen viewer.
 class MediaMessageContent extends StatefulWidget {
   const MediaMessageContent({
     super.key,
@@ -25,25 +27,35 @@ class MediaMessageContent extends StatefulWidget {
 }
 
 class _MediaMessageContentState extends State<MediaMessageContent> {
-  VideoPlayerController? _videoController;
+  Uint8List? _videoThumbnailBytes;
+  bool _thumbnailFailed = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.mediaType == MessageMediaType.video) {
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.mediaUrl))
-        ..initialize().then((_) {
-          if (mounted) setState(() {});
-        }).catchError((_) {
-          if (mounted) setState(() {});
-        });
+      _loadVideoThumbnail();
     }
   }
 
-  @override
-  void dispose() {
-    _videoController?.dispose();
-    super.dispose();
+  Future<void> _loadVideoThumbnail() async {
+    try {
+      final bytes = await VideoThumbnail.thumbnailData(
+        video: widget.mediaUrl,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 480,
+        quality: 75,
+      );
+      if (mounted) {
+        setState(() {
+          _videoThumbnailBytes = bytes;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _thumbnailFailed = true);
+      }
+    }
   }
 
   void _openFullScreen() {
@@ -72,7 +84,11 @@ class _MediaMessageContentState extends State<MediaMessageContent> {
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => Container(
                     color: Colors.grey[800],
-                    child: const Icon(Icons.broken_image, size: 48, color: Colors.white54),
+                    child: const Icon(
+                      Icons.broken_image,
+                      size: 48,
+                      color: Colors.white54,
+                    ),
                   ),
                 )
               : _buildVideoThumbnail(),
@@ -82,11 +98,14 @@ class _MediaMessageContentState extends State<MediaMessageContent> {
   }
 
   Widget _buildVideoThumbnail() {
-    if (_videoController == null || !_videoController!.value.isInitialized) {
+    if (_videoThumbnailBytes == null && !_thumbnailFailed) {
       return Container(
         color: Colors.grey[800],
         child: const Center(
-          child: CircularProgressIndicator(color: Colors.white54, strokeWidth: 2),
+          child: CircularProgressIndicator(
+            color: Colors.white54,
+            strokeWidth: 2,
+          ),
         ),
       );
     }
@@ -94,13 +113,18 @@ class _MediaMessageContentState extends State<MediaMessageContent> {
       alignment: Alignment.center,
       fit: StackFit.expand,
       children: [
-        AspectRatio(
-          aspectRatio: _videoController!.value.aspectRatio,
-          child: VideoPlayer(_videoController!),
-        ),
+        if (_videoThumbnailBytes != null)
+          Image.memory(
+            _videoThumbnailBytes!,
+            fit: BoxFit.cover,
+            width: widget.maxWidth,
+            height: widget.maxHeight,
+          )
+        else
+          Container(color: Colors.grey[800]),
         Container(
           decoration: const BoxDecoration(
-            color: Colors.black26,
+            color: Colors.black38,
             shape: BoxShape.circle,
           ),
           padding: const EdgeInsets.all(12),
