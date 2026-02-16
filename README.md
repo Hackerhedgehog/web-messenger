@@ -4,7 +4,7 @@ A new Flutter project.
 
 ## Firebase Storage CORS (for web)
 
-Profile pictures work on Android but show the default on web because browsers block cross-origin image requests (CORS). To fix:
+Profile pictures and **video messages** require CORS configuration. Without it, browsers block cross-origin requests and videos will show a loading spinner indefinitely. To fix:
 
 1. **Install Google Cloud CLI** if needed: https://cloud.google.com/sdk/docs/install
 

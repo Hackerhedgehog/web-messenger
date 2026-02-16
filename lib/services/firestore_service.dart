@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/connection_info.dart';
 import '../models/group_invite_info.dart';
 import '../models/message_model.dart';
+import 'storage_service.dart';
 
 class _InviteEntry {
   _InviteEntry(this.senderId, this.timestamp);
@@ -21,6 +22,7 @@ String connectionIdFromUsers(String userId1, String userId2) {
 
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final StorageService _storageService = StorageService();
 
   // Create user profile in Firestore
   Future<void> createUserProfile({
@@ -142,7 +144,10 @@ class FirestoreService {
   }
 
   /// Returns true if [username] can be used by [userId] (available or already theirs).
-  Future<bool> isUsernameAvailableForUser(String username, String userId) async {
+  Future<bool> isUsernameAvailableForUser(
+    String username,
+    String userId,
+  ) async {
     final available = await isUsernameAvailable(username);
     if (available) return true;
     final existing = await _firestore
@@ -163,8 +168,9 @@ class FirestoreService {
   }) async {
     try {
       return await _firestore.runTransaction((transaction) async {
-        final senderDoc =
-            await transaction.get(_firestore.collection('users').doc(senderUserId));
+        final senderDoc = await transaction.get(
+          _firestore.collection('users').doc(senderUserId),
+        );
         final senderData = senderDoc.data() ?? {};
         final connections = senderData['connections'];
         final invites = senderData['invites'];
@@ -182,30 +188,24 @@ class FirestoreService {
             userId1: senderUserId,
             userId2: receiverUserId,
           );
-          final connId =
-              connectionIdFromUsers(senderUserId, receiverUserId);
+          final connId = connectionIdFromUsers(senderUserId, receiverUserId);
           _createConnectionDocument(
             transaction: transaction,
             connectionId: connId,
             userId1: senderUserId,
             userId2: receiverUserId,
           );
-          transaction.update(
-            _firestore.collection('users').doc(senderUserId),
-            {
-              'invites.$receiverUserId': FieldValue.delete(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            },
-          );
+          transaction.update(_firestore.collection('users').doc(senderUserId), {
+            'invites.$receiverUserId': FieldValue.delete(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
           return 'connected';
         } else {
-          transaction.update(
-            _firestore.collection('users').doc(receiverUserId),
-            {
-              'invites.$senderUserId': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            },
-          );
+          transaction
+              .update(_firestore.collection('users').doc(receiverUserId), {
+                'invites.$senderUserId': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
           return null;
         }
       });
@@ -220,20 +220,14 @@ class FirestoreService {
     required String userId2,
   }) {
     final now = FieldValue.serverTimestamp();
-    transaction.update(
-      _firestore.collection('users').doc(userId1),
-      {
-        'connections.$userId2': now,
-        'updatedAt': now,
-      },
-    );
-    transaction.update(
-      _firestore.collection('users').doc(userId2),
-      {
-        'connections.$userId1': now,
-        'updatedAt': now,
-      },
-    );
+    transaction.update(_firestore.collection('users').doc(userId1), {
+      'connections.$userId2': now,
+      'updatedAt': now,
+    });
+    transaction.update(_firestore.collection('users').doc(userId2), {
+      'connections.$userId1': now,
+      'updatedAt': now,
+    });
   }
 
   /// Creates the connections/{connectionID} document and participants subcollection.
@@ -245,13 +239,11 @@ class FirestoreService {
     required String userId2,
   }) {
     final now = FieldValue.serverTimestamp();
-    final connectionRef =
-        _firestore.collection('connections').doc(connectionId);
+    final connectionRef = _firestore
+        .collection('connections')
+        .doc(connectionId);
 
-    transaction.set(connectionRef, {
-      'name': '',
-      'lastMessage': now,
-    });
+    transaction.set(connectionRef, {'name': '', 'lastMessage': now});
 
     transaction.set(connectionRef.collection('participants').doc(userId1), {
       'lastSeen': now,
@@ -274,8 +266,8 @@ class FirestoreService {
           .collection('participants')
           .doc(userId)
           .set({
-        'lastSeen': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+            'lastSeen': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
     } catch (e) {
       // Silently ignore - participant may have left the connection
     }
@@ -295,8 +287,8 @@ class FirestoreService {
           .collection('participants')
           .doc(userId)
           .set({
-        'lastTyping': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+            'lastTyping': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
     } catch (e) {
       // Silently ignore - participant may have left the connection
     }
@@ -315,21 +307,17 @@ class FirestoreService {
           userId1: receiverUserId,
           userId2: senderUserId,
         );
-        final connId =
-            connectionIdFromUsers(receiverUserId, senderUserId);
+        final connId = connectionIdFromUsers(receiverUserId, senderUserId);
         _createConnectionDocument(
           transaction: transaction,
           connectionId: connId,
           userId1: receiverUserId,
           userId2: senderUserId,
         );
-        transaction.update(
-          _firestore.collection('users').doc(receiverUserId),
-          {
-            'invites.$senderUserId': FieldValue.delete(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        );
+        transaction.update(_firestore.collection('users').doc(receiverUserId), {
+          'invites.$senderUserId': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
       });
     } catch (e) {
       throw 'Failed to accept invite: $e';
@@ -353,29 +341,35 @@ class FirestoreService {
   }
 
   /// Stream of all invites (1:1 and group) for the Invites tab.
-  /// Listens to user doc. groupInvites is `Map<groupId, timestamp>`.
-  /// Fetches connection for each group invite. Sorted by timestamp (newest first).
+  /// Uses single invites map: keys are senderId (1:1) or groupId (group).
+  /// Group IDs start with "group_". Sorted by timestamp (newest first).
   Stream<({List<String> senderIds, List<GroupInviteInfo> groupInvites})>
-      allInvitesStream(String userId) {
-    return _firestore
-        .collection('users')
-        .doc(userId)
-        .snapshots()
-        .asyncMap((doc) async {
+  allInvitesStream(String userId) {
+    return _firestore.collection('users').doc(userId).snapshots().asyncMap((
+      doc,
+    ) async {
       if (!doc.exists) {
         return (senderIds: <String>[], groupInvites: <GroupInviteInfo>[]);
       }
       final data = doc.data() ?? {};
+      final invites = data['invites'];
+      if (invites is! Map) {
+        return (senderIds: <String>[], groupInvites: <GroupInviteInfo>[]);
+      }
 
       final inviteEntries = <_InviteEntry>[];
-      final invites = data['invites'];
-      if (invites is Map) {
-        for (final e in invites.entries) {
-          final senderId = e.key.toString();
-          final ts = e.value is Timestamp ? e.value as Timestamp : null;
-          inviteEntries.add(_InviteEntry(senderId, ts));
+      final groupEntries = <MapEntry<String, Timestamp?>>[];
+
+      for (final e in invites.entries) {
+        final key = e.key.toString();
+        final ts = e.value is Timestamp ? e.value as Timestamp : null;
+        if (key.startsWith('group_')) {
+          groupEntries.add(MapEntry(key, ts));
+        } else {
+          inviteEntries.add(_InviteEntry(key, ts));
         }
       }
+
       inviteEntries.sort((a, b) {
         if (a.timestamp == null && b.timestamp == null) return 0;
         if (a.timestamp == null) return 1;
@@ -385,83 +379,70 @@ class FirestoreService {
       final senderIds = inviteEntries.map((e) => e.senderId).toList();
 
       final groupInvites = <GroupInviteInfo>[];
-      final groupInvitesData = data['groupInvites'];
-      if (groupInvitesData is Map) {
-        for (final e in groupInvitesData.entries) {
-          final groupId = e.key.toString();
-          final ts = e.value is Timestamp ? e.value as Timestamp : null;
-          try {
-            final connDoc = await _firestore
-                .collection('connections')
-                .doc(groupId)
-                .get();
-            if (connDoc.exists) {
-              final connData = connDoc.data() ?? {};
-              groupInvites.add(GroupInviteInfo.fromConnection(
-                groupId,
-                connData,
-                ts,
-              ));
-            }
-          } catch (_) {
-            // Skip if connection not found
+      for (final e in groupEntries) {
+        final groupId = e.key;
+        final ts = e.value;
+        try {
+          final connDoc = await _firestore
+              .collection('connections')
+              .doc(groupId)
+              .get();
+          if (connDoc.exists) {
+            final connData = connDoc.data() ?? {};
+            groupInvites.add(
+              GroupInviteInfo.fromConnection(groupId, connData, ts),
+            );
           }
+        } catch (_) {
+          // Skip if connection not found
         }
-        groupInvites.sort((a, b) {
-          final ta = a.timestamp;
-          final tb = b.timestamp;
-          if (ta == null && tb == null) return 0;
-          if (ta == null) return 1;
-          if (tb == null) return -1;
-          return tb.compareTo(ta);
-        });
       }
+      groupInvites.sort((a, b) {
+        final ta = a.timestamp;
+        final tb = b.timestamp;
+        if (ta == null && tb == null) return 0;
+        if (ta == null) return 1;
+        if (tb == null) return -1;
+        return tb.compareTo(ta);
+      });
 
       return (senderIds: senderIds, groupInvites: groupInvites);
     });
   }
 
-  /// Stream of total invite count (1:1 + group invites) for badge display.
+  /// Stream of total invite count (1:1 + group) for badge display.
+  /// Both stored in invites map.
   Stream<int> totalInviteCountStream(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().map((doc) {
       if (!doc.exists) return 0;
       final data = doc.data() ?? {};
-      var count = 0;
       final invites = data['invites'];
-      if (invites is Map) count += invites.length;
-      final groupInvites = data['groupInvites'];
-      if (groupInvites is Map) count += groupInvites.length;
-      return count;
+      return invites is Map ? invites.length : 0;
     });
   }
 
   /// Stream of invite sender user IDs for the given user, newest first.
-  /// Emits whenever invites change. Supports both 'invites' map (with timestamps)
-  /// and legacy 'inviteSenders' array (treated as oldest).
+  /// Excludes group invites (keys starting with "group_").
   Stream<List<String>> inviteSendersStream(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().map((doc) {
       if (!doc.exists) return <String>[];
       final data = doc.data() ?? {};
-
       final entries = <_InviteEntry>[];
-
-      // New format: invites map { senderId: timestamp }
       final invites = data['invites'];
       if (invites is Map) {
         for (final e in invites.entries) {
-          final senderId = e.key.toString();
+          final key = e.key.toString();
+          if (key.startsWith('group_')) continue;
           final ts = e.value is Timestamp ? e.value as Timestamp : null;
-          entries.add(_InviteEntry(senderId, ts));
+          entries.add(_InviteEntry(key, ts));
         }
       }
-
       entries.sort((a, b) {
         if (a.timestamp == null && b.timestamp == null) return 0;
         if (a.timestamp == null) return 1;
         if (b.timestamp == null) return -1;
         return b.timestamp!.compareTo(a.timestamp!);
       });
-
       return entries.map((e) => e.senderId).toList();
     });
   }
@@ -469,43 +450,39 @@ class FirestoreService {
   /// Stream of connections for the Chats tab, sorted by lastMessage (newest first).
   /// Includes both 1:1 connections and group connections.
   Stream<List<ConnectionInfo>> connectionsForUserStream(String userId) {
-    return _firestore.collection('users').doc(userId).snapshots().asyncExpand(
-      (userDoc) {
-        final data = userDoc.data();
-        final connections = data?['connections'] as Map? ?? {};
-        final groupConnections =
-            data?['groupConnections'] as Map? ?? {};
+    return _firestore.collection('users').doc(userId).snapshots().asyncExpand((
+      userDoc,
+    ) {
+      final data = userDoc.data();
+      final connections = data?['connections'] as Map? ?? {};
+      final groupConnections = data?['groupConnections'] as Map? ?? {};
 
-        final connectionIds = <String>[];
-        final groupConnectionIds =
-            groupConnections.keys.map((e) => e.toString()).toList();
+      final connectionIds = <String>[];
+      final groupConnectionIds = groupConnections.keys
+          .map((e) => e.toString())
+          .toList();
 
-        final otherUserIds =
-            connections.keys.map((e) => e.toString()).toList();
-        for (final o in otherUserIds) {
-          connectionIds.add(connectionIdFromUsers(userId, o));
-        }
-        connectionIds.addAll(groupConnectionIds);
+      final otherUserIds = connections.keys.map((e) => e.toString()).toList();
+      for (final o in otherUserIds) {
+        connectionIds.add(connectionIdFromUsers(userId, o));
+      }
+      connectionIds.addAll(groupConnectionIds);
 
-        if (connectionIds.isEmpty) {
-          return Stream.value(<ConnectionInfo>[]);
-        }
+      if (connectionIds.isEmpty) {
+        return Stream.value(<ConnectionInfo>[]);
+      }
 
-        final connectionStreams = connectionIds
-            .map((id) =>
-                _firestore.collection('connections').doc(id).snapshots())
-            .toList();
+      final connectionStreams = connectionIds
+          .map((id) => _firestore.collection('connections').doc(id).snapshots())
+          .toList();
 
-        return StreamGroup.merge<Object?>([
-          Stream.value(null),
-          ...connectionStreams,
-        ]).asyncMap((_) => _fetchAllConnectionInfos(
-              userId,
-              connections,
-              groupConnections,
-            ));
-      },
-    );
+      return StreamGroup.merge<Object?>([
+        Stream.value(null),
+        ...connectionStreams,
+      ]).asyncMap(
+        (_) => _fetchAllConnectionInfos(userId, connections, groupConnections),
+      );
+    });
   }
 
   Future<List<ConnectionInfo>> _fetchAllConnectionInfos(
@@ -549,8 +526,10 @@ class FirestoreService {
     String otherId,
     Map<String, dynamic>? connData,
   ) async {
-    final connDoc =
-        await _firestore.collection('connections').doc(connId).get();
+    final connDoc = await _firestore
+        .collection('connections')
+        .doc(connId)
+        .get();
     if (!connDoc.exists) return null;
 
     final data = connData ?? connDoc.data() ?? {};
@@ -560,10 +539,12 @@ class FirestoreService {
         ? lastMessageTs.toDate()
         : null;
 
-    final participantsSnapshot =
-        await connDoc.reference.collection('participants').get();
-    final otherStillConnected =
-        participantsSnapshot.docs.any((d) => d.id == otherId);
+    final participantsSnapshot = await connDoc.reference
+        .collection('participants')
+        .get();
+    final otherStillConnected = participantsSnapshot.docs.any(
+      (d) => d.id == otherId,
+    );
 
     String displayName = name;
     if (displayName.isEmpty && otherStillConnected) {
@@ -599,10 +580,10 @@ class FirestoreService {
         ? lastMessageTs.toDate()
         : null;
 
-    final participantsSnapshot =
-        await connDoc.reference.collection('participants').get();
-    final participantIds =
-        participantsSnapshot.docs.map((d) => d.id).toList();
+    final participantsSnapshot = await connDoc.reference
+        .collection('participants')
+        .get();
+    final participantIds = participantsSnapshot.docs.map((d) => d.id).toList();
 
     return ConnectionInfo(
       connectionId: groupConnectionId,
@@ -627,7 +608,7 @@ class FirestoreService {
 
   /// Sends group invites from [creatorUserId] to [selectedUserIds].
   /// Creates connection immediately with only creator as participant.
-  /// groupInvites on receivers: `Map<groupId, timestamp>` (like regular invites).
+  /// Adds invites.$groupId = timestamp on receivers (same invites map as 1:1).
   /// Returns the generated groupId.
   Future<String> sendGroupInvites({
     required String creatorUserId,
@@ -648,13 +629,13 @@ class FirestoreService {
       }
     }
 
-    final groupId = 'group_${DateTime.now().millisecondsSinceEpoch}_'
+    final groupId =
+        'group_${DateTime.now().millisecondsSinceEpoch}_'
         '${Random().nextInt(999999)}';
 
     try {
       final now = FieldValue.serverTimestamp();
-      final connectionRef =
-          _firestore.collection('connections').doc(groupId);
+      final connectionRef = _firestore.collection('connections').doc(groupId);
 
       await _firestore.runTransaction((transaction) async {
         transaction.set(connectionRef, {
@@ -669,20 +650,14 @@ class FirestoreService {
         );
         transaction.set(
           _firestore.collection('users').doc(creatorUserId),
-          {
-            'groupConnections.$groupId': now,
-            'updatedAt': now,
-          },
+          {'groupConnections.$groupId': now, 'updatedAt': now},
           SetOptions(merge: true),
         );
         for (final receiverId in selectedUserIds) {
-          transaction.set(
+          transaction.update(
             _firestore.collection('users').doc(receiverId),
-            {
-              'groupInvites.$groupId': now,
-              'updatedAt': now,
-            },
-            SetOptions(merge: true),
+            {'invites.$groupId': now, 'updatedAt': now},
+            //SetOptions(merge: true),
           );
         }
       });
@@ -694,30 +669,29 @@ class FirestoreService {
   }
 
   /// Stream of group invites for the given user.
-  /// groupInvites is `Map<groupId, timestamp>`. Fetches connection for each.
+  /// Reads from invites map (keys starting with "group_"). Fetches connection for each.
   Stream<List<GroupInviteInfo>> groupInvitesStream(String userId) {
-    return _firestore
-        .collection('users')
-        .doc(userId)
-        .snapshots()
-        .asyncMap((doc) async {
+    return _firestore.collection('users').doc(userId).snapshots().asyncMap((
+      doc,
+    ) async {
       if (!doc.exists) return <GroupInviteInfo>[];
       final data = doc.data() ?? {};
-      final groupInvitesData = data['groupInvites'];
-      if (groupInvitesData is! Map) return <GroupInviteInfo>[];
+      final invites = data['invites'];
+      if (invites is! Map) return <GroupInviteInfo>[];
       final list = <GroupInviteInfo>[];
-      for (final e in groupInvitesData.entries) {
+      for (final e in invites.entries) {
         final groupId = e.key.toString();
+        if (!groupId.startsWith('group_')) continue;
         final ts = e.value is Timestamp ? e.value as Timestamp : null;
         try {
-          final connDoc =
-              await _firestore.collection('connections').doc(groupId).get();
+          final connDoc = await _firestore
+              .collection('connections')
+              .doc(groupId)
+              .get();
           if (connDoc.exists) {
-            list.add(GroupInviteInfo.fromConnection(
-              groupId,
-              connDoc.data() ?? {},
-              ts,
-            ));
+            list.add(
+              GroupInviteInfo.fromConnection(groupId, connDoc.data() ?? {}, ts),
+            );
           }
         } catch (_) {
           // Skip if connection not found
@@ -736,23 +710,24 @@ class FirestoreService {
   }
 
   /// Accepts a group invite. Connection already exists (created on send).
-  /// Adds receiver to participants and removes invite.
+  /// Adds receiver to participants and removes invite from invites map.
   Future<void> acceptGroupInvite({
     required String receiverUserId,
     required String groupId,
   }) async {
     try {
-      final userDoc =
-          await _firestore.collection('users').doc(receiverUserId).get();
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(receiverUserId)
+          .get();
       if (!userDoc.exists) throw 'User not found';
       final data = userDoc.data() ?? {};
-      final groupInvites = data['groupInvites'];
-      if (groupInvites is! Map || !groupInvites.containsKey(groupId)) {
+      final invites = data['invites'];
+      if (invites is! Map || !invites.containsKey(groupId)) {
         throw 'Group invite not found';
       }
 
-      final connRef =
-          _firestore.collection('connections').doc(groupId);
+      final connRef = _firestore.collection('connections').doc(groupId);
       final connDoc = await connRef.get();
       if (!connDoc.exists) {
         throw 'Group no longer exists';
@@ -765,14 +740,11 @@ class FirestoreService {
           connRef.collection('participants').doc(receiverUserId),
           {'lastSeen': now},
         );
-        transaction.update(
-          _firestore.collection('users').doc(receiverUserId),
-          {
-            'groupConnections.$groupId': now,
-            'groupInvites.$groupId': FieldValue.delete(),
-            'updatedAt': now,
-          },
-        );
+        transaction.update(_firestore.collection('users').doc(receiverUserId), {
+          'groupConnections.$groupId': now,
+          'invites.$groupId': FieldValue.delete(),
+          'updatedAt': now,
+        });
       });
     } catch (e) {
       throw 'Failed to accept group invite: $e';
@@ -786,7 +758,7 @@ class FirestoreService {
   }) async {
     try {
       await _firestore.collection('users').doc(receiverUserId).update({
-        'groupInvites.$groupId': FieldValue.delete(),
+        'invites.$groupId': FieldValue.delete(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
@@ -829,8 +801,9 @@ class FirestoreService {
   }) async {
     try {
       final connectionId = connectionIdFromUsers(currentUserId, otherUserId);
-      final connectionRef =
-          _firestore.collection('connections').doc(connectionId);
+      final connectionRef = _firestore
+          .collection('connections')
+          .doc(connectionId);
 
       final currentUserProfile = await getUserProfile(currentUserId);
       final removedUserName =
@@ -840,24 +813,19 @@ class FirestoreService {
         transaction.delete(
           connectionRef.collection('participants').doc(currentUserId),
         );
-        transaction.update(
-          _firestore.collection('users').doc(currentUserId),
-          {
-            'connections.$otherUserId': FieldValue.delete(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        );
-        transaction.update(
-          connectionRef,
-          {
-            'name': removedUserName,
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        );
+        transaction.update(_firestore.collection('users').doc(currentUserId), {
+          'connections.$otherUserId': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        transaction.update(connectionRef, {
+          'name': removedUserName,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
       });
 
-      final participantsSnapshot =
-          await connectionRef.collection('participants').get();
+      final participantsSnapshot = await connectionRef
+          .collection('participants')
+          .get();
       if (participantsSnapshot.docs.isEmpty) {
         await _deleteCollection(connectionRef.collection('participants'));
         await _deleteCollection(connectionRef.collection('messages'));
@@ -870,8 +838,10 @@ class FirestoreService {
 
   Future<void> _deleteCollection(CollectionReference collection) async {
     const batchSize = 100;
-    QuerySnapshot snapshot =
-        await collection.orderBy(FieldPath.documentId).limit(batchSize).get();
+    QuerySnapshot snapshot = await collection
+        .orderBy(FieldPath.documentId)
+        .limit(batchSize)
+        .get();
 
     while (snapshot.docs.isNotEmpty) {
       final batch = _firestore.batch();
@@ -905,17 +875,13 @@ class FirestoreService {
     if (connections is Map) {
       final otherUserIds = connections.keys.map((e) => e.toString()).toList();
       for (final otherId in otherUserIds) {
-        await removeConnection(
-          currentUserId: userId,
-          otherUserId: otherId,
-        );
+        await removeConnection(currentUserId: userId, otherUserId: otherId);
       }
     }
 
     final groupConnections = userData['groupConnections'];
     if (groupConnections is Map) {
-      final groupIds =
-          groupConnections.keys.map((e) => e.toString()).toList();
+      final groupIds = groupConnections.keys.map((e) => e.toString()).toList();
       for (final groupId in groupIds) {
         await removeUserFromGroup(userId: userId, groupConnectionId: groupId);
       }
@@ -928,24 +894,24 @@ class FirestoreService {
     required String groupConnectionId,
   }) async {
     try {
-      final connectionRef =
-          _firestore.collection('connections').doc(groupConnectionId);
-      final participantRef =
-          connectionRef.collection('participants').doc(userId);
+      final connectionRef = _firestore
+          .collection('connections')
+          .doc(groupConnectionId);
+      final participantRef = connectionRef
+          .collection('participants')
+          .doc(userId);
 
       await _firestore.runTransaction((transaction) async {
         transaction.delete(participantRef);
-        transaction.update(
-          _firestore.collection('users').doc(userId),
-          {
-            'groupConnections.$groupConnectionId': FieldValue.delete(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        );
+        transaction.update(_firestore.collection('users').doc(userId), {
+          'groupConnections.$groupConnectionId': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
       });
 
-      final participantsSnapshot =
-          await connectionRef.collection('participants').get();
+      final participantsSnapshot = await connectionRef
+          .collection('participants')
+          .get();
       if (participantsSnapshot.docs.isEmpty) {
         await _deleteCollection(connectionRef.collection('participants'));
         await _deleteCollection(connectionRef.collection('messages'));
@@ -977,19 +943,19 @@ class FirestoreService {
         hasWrites = true;
       }
 
-      final groupInvites = data['groupInvites'];
-      if (groupInvites is Map) {
-        for (final e in groupInvites.entries) {
-          final groupId = e.key.toString();
+      if (invites is Map) {
+        for (final e in invites.entries) {
+          final key = e.key.toString();
+          if (!key.startsWith('group_')) continue;
           try {
             final connDoc = await _firestore
                 .collection('connections')
-                .doc(groupId)
+                .doc(key)
                 .get();
             if (connDoc.exists) {
               final connData = connDoc.data() ?? {};
               if (connData['creatorId'] == userId) {
-                updates['groupInvites.$groupId'] = FieldValue.delete();
+                updates['invites.$key'] = FieldValue.delete();
                 hasWrites = true;
               }
             }
@@ -1018,24 +984,40 @@ class FirestoreService {
   }
 
   /// Sends a message in a connection. Updates connection lastMessage.
+  /// [mediaUrl], [mediaPath], [mediaType] are optional for media messages.
+  /// When media is provided, pass [messageId] from [generateMessageId] so
+  /// storage path matches.
   Future<void> sendMessage({
     required String connectionId,
     required String senderId,
     required String text,
+    String? messageId,
+    String? mediaUrl,
+    String? mediaPath,
+    MessageMediaType? mediaType,
   }) async {
     try {
-      final connectionRef =
-          _firestore.collection('connections').doc(connectionId);
+      final connectionRef = _firestore
+          .collection('connections')
+          .doc(connectionId);
       final messagesRef = connectionRef.collection('messages');
 
       final now = FieldValue.serverTimestamp();
+      final data = <String, dynamic>{
+        'senderId': senderId,
+        'text': text.trim(),
+        'createdAt': now,
+      };
+      if (mediaUrl != null && mediaPath != null && mediaType != null) {
+        data['mediaUrl'] = mediaUrl;
+        data['mediaPath'] = mediaPath;
+        data['mediaType'] = mediaType == MessageMediaType.image ? 'image' : 'video';
+      }
+
       await _firestore.runTransaction((transaction) async {
-        final messageRef = messagesRef.doc();
-        transaction.set(messageRef, {
-          'senderId': senderId,
-          'text': text.trim(),
-          'createdAt': now,
-        });
+        final messageRef =
+            messageId != null ? messagesRef.doc(messageId) : messagesRef.doc();
+        transaction.set(messageRef, data);
         transaction.update(connectionRef, {
           'lastMessage': now,
           'updatedAt': now,
@@ -1051,35 +1033,77 @@ class FirestoreService {
     }
   }
 
-  /// Updates a message's text. Does not change createdAt.
+  /// Returns a new message document ID for use before creating the message.
+  /// Use this to upload media before calling sendMessage.
+  String generateMessageId(String connectionId) {
+    return _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('messages')
+        .doc()
+        .id;
+  }
+
+  /// Updates a message's text and optionally media. Does not change createdAt.
+  /// Pass [oldMediaPath] to delete unreferenced media when replacing or removing.
+  /// Pass [newMediaUrl], [newMediaPath], [newMediaType] to set new media.
+  /// When only updating text, omit media params to preserve existing media.
   Future<void> updateMessage({
     required String connectionId,
     required String messageId,
     required String newText,
+    String? oldMediaPath,
+    String? newMediaUrl,
+    String? newMediaPath,
+    MessageMediaType? newMediaType,
   }) async {
     try {
+      if (oldMediaPath != null && oldMediaPath.isNotEmpty) {
+        await _storageService.deleteMessageMediaByPath(oldMediaPath);
+      }
+
+      final data = <String, dynamic>{'text': newText.trim()};
+      if (newMediaUrl != null && newMediaPath != null && newMediaType != null) {
+        data['mediaUrl'] = newMediaUrl;
+        data['mediaPath'] = newMediaPath;
+        data['mediaType'] =
+            newMediaType == MessageMediaType.image ? 'image' : 'video';
+      } else if (oldMediaPath != null) {
+        data['mediaUrl'] = FieldValue.delete();
+        data['mediaPath'] = FieldValue.delete();
+        data['mediaType'] = FieldValue.delete();
+      }
+
       await _firestore
           .collection('connections')
           .doc(connectionId)
           .collection('messages')
           .doc(messageId)
-          .update({'text': newText.trim()});
+          .update(data);
     } catch (e) {
       throw 'Failed to update message: $e';
     }
   }
 
-  /// Deletes a message. Updates connection lastMessage if deleting the most
-  /// recent message.
+  /// Deletes a message. Deletes unreferenced media from storage. Updates
+  /// connection lastMessage if deleting the most recent message.
   Future<void> deleteMessage({
     required String connectionId,
     required String messageId,
   }) async {
     try {
-      final connectionRef =
-          _firestore.collection('connections').doc(connectionId);
+      final connectionRef = _firestore
+          .collection('connections')
+          .doc(connectionId);
       final messagesRef = connectionRef.collection('messages');
       final messageRef = messagesRef.doc(messageId);
+
+      final messageDoc = await messageRef.get();
+      final data = messageDoc.data();
+      final mediaPath = data != null ? data['mediaPath'] as String? : null;
+      if (mediaPath != null && mediaPath.isNotEmpty) {
+        await _storageService.deleteMessageMediaByPath(mediaPath);
+      }
 
       final topSnapshot = await messagesRef
           .orderBy('createdAt', descending: true)
@@ -1111,7 +1135,7 @@ class FirestoreService {
   /// oldest document snapshot for pagination. Pass [startAfterDoc] to load
   /// older messages.
   Future<({List<Message> messages, DocumentSnapshot? oldestDoc})>
-      getMessagesPage({
+  getMessagesPage({
     required String connectionId,
     int limit = 10,
     DocumentSnapshot? startAfterDoc,
@@ -1130,10 +1154,10 @@ class FirestoreService {
     }
 
     final snapshot = await query.get();
-    final messages =
-        snapshot.docs.map((d) => Message.fromFirestore(d)).toList();
-    final oldestDoc =
-        snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    final messages = snapshot.docs
+        .map((d) => Message.fromFirestore(d))
+        .toList();
+    final oldestDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
     return (messages: messages, oldestDoc: oldestDoc);
   }
 
@@ -1186,8 +1210,9 @@ class FirestoreService {
       query = query.startAfter([Timestamp.fromDate(after)]);
     }
 
-    return query.snapshots().map((snapshot) =>
-        snapshot.docs.map((d) => Message.fromFirestore(d)).toList());
+    return query.snapshots().map(
+      (snapshot) => snapshot.docs.map((d) => Message.fromFirestore(d)).toList(),
+    );
   }
 
   /// Stream of messages where createdAt >= [createdAtFloor]. Listens for
@@ -1204,7 +1229,9 @@ class FirestoreService {
         .orderBy('createdAt', descending: false)
         .startAt([Timestamp.fromDate(createdAtFloor)])
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((d) => Message.fromFirestore(d)).toList());
+        .map(
+          (snapshot) =>
+              snapshot.docs.map((d) => Message.fromFirestore(d)).toList(),
+        );
   }
 }

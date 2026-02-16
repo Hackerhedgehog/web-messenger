@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Represents a group invite received by a user.
-/// groupInvites in user doc is `Map<groupId, timestamp>`. Connection details
+/// Stored in invites map with key groupId (starts with "group_"). Connection details
 /// (name, creatorId) are fetched from connections/{groupId}.
 class GroupInviteInfo {
   const GroupInviteInfo({
