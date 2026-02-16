@@ -239,7 +239,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _textController.text.trim();
     if (text.isEmpty || _isSending) return;
 
-    _textController.clear();
     setState(() => _isSending = true);
 
     try {
@@ -249,6 +248,7 @@ class _ChatScreenState extends State<ChatScreen> {
         text: text,
       );
       if (mounted) {
+        _textController.clear();
         setState(() => _isSending = false);
       }
     } catch (e) {
@@ -258,6 +258,11 @@ class _ChatScreenState extends State<ChatScreen> {
           SnackBar(
             content: Text('Failed to send: $e'),
             backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _sendMessage(),
+            ),
           ),
         );
       }
@@ -386,6 +391,11 @@ class _ChatScreenState extends State<ChatScreen> {
           SnackBar(
             content: Text('Failed to send media: $e'),
             backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _pickAndSendMedia(),
+            ),
           ),
         );
       }
@@ -737,13 +747,50 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final lastSeenMessage = _findLastSeenMessage(otherLastSeen);
 
+    final showSendingIndicator = _isSending;
+    final showLoadingIndicator = _hasMore && _isLoadingMore;
+    final itemCount = _messages.length +
+        (showSendingIndicator ? 1 : 0) +
+        (showLoadingIndicator ? 1 : 0);
+
     return ListView.builder(
       controller: _scrollController,
       reverse: true,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      itemCount: _messages.length + (_hasMore && _isLoadingMore ? 1 : 0),
+      itemCount: itemCount,
       itemBuilder: (context, index) {
-        if (index == _messages.length) {
+        if (showSendingIndicator && index == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: _myBubbleColor,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Sending...',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.grey,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        final messageIndex =
+            index - (showSendingIndicator ? 1 : 0);
+        if (showLoadingIndicator && messageIndex == _messages.length) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(16),
@@ -751,7 +798,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           );
         }
-        final msg = _messages[_messages.length - 1 - index];
+        final msg = _messages[_messages.length - 1 - messageIndex];
         final isMe = msg.senderId == widget.currentUser.userId;
         final showSeenBy = isMe && msg.id == lastSeenMessage?.id;
 
@@ -811,19 +858,30 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ),
-              if (showSeenBy) ...[
-                const SizedBox(height: 4),
+              if (isMe) ...[
+                const SizedBox(height: 2),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    ProfileAvatar(user: otherUser, radius: 12),
-                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.check_circle,
+                      size: 14,
+                      color: Colors.green.shade300,
+                    ),
+                    const SizedBox(width: 4),
+                    if (showSeenBy) ...[
+                      ProfileAvatar(user: otherUser, radius: 12),
+                      const SizedBox(width: 6),
+                    ],
                     Text(
-                      'Seen by ${otherUser.username}',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                      showSeenBy
+                          ? 'Seen by ${otherUser.username}'
+                          : 'Delivered',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey,
+                        fontSize: 11,
+                      ),
                     ),
                   ],
                 ),
