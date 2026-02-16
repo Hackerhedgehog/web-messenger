@@ -72,7 +72,7 @@ class _ChooseParticipantsScreenState extends State<ChooseParticipantsScreen> {
     setState(() => _isCreating = true);
 
     try {
-      await _firestoreService.createGroupConnection(
+      await _firestoreService.sendGroupInvites(
         creatorUserId: widget.currentUser.userId,
         selectedUserIds: _selectedIds.toList(),
         name: name,
@@ -80,7 +80,7 @@ class _ChooseParticipantsScreenState extends State<ChooseParticipantsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Group created'),
+            content: Text('Group invites sent'),
             backgroundColor: Colors.green,
           ),
         );
@@ -90,7 +90,7 @@ class _ChooseParticipantsScreenState extends State<ChooseParticipantsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to create group: $e'),
+            content: Text('Failed to send group invites: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -183,7 +183,7 @@ class _ChooseParticipantsScreenState extends State<ChooseParticipantsScreen> {
                                 color: Colors.white,
                               ),
                             )
-                          : const Text('Create group'),
+                          : const Text('Send invites'),
                     ),
                   ),
                 ),

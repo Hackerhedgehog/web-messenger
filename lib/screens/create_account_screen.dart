@@ -19,6 +19,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _usernameController = TextEditingController();
+  final _bioController = TextEditingController();
   final _authService = AuthService();
   final _firestoreService = FirestoreService();
   final _storageService = StorageService();
@@ -39,6 +40,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _usernameController.dispose();
+    _bioController.dispose();
     super.dispose();
   }
 
@@ -169,6 +171,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
             email: _emailController.text.trim(),
             username: _usernameController.text.trim(),
             profilePictureUrl: profilePictureUrl,
+            bio: _bioController.text.trim().isNotEmpty
+                ? _bioController.text.trim()
+                : null,
           );
 
           // Sign out so the user is not auto-logged in; they must verify email and log in
@@ -305,7 +310,19 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                     autovalidateMode: AutovalidateMode.onUserInteraction,
                   ),
                   const SizedBox(height: 16),
-
+                  TextFormField(
+                    controller: _bioController,
+                    decoration: const InputDecoration(
+                      labelText: 'Bio (optional)',
+                      hintText: 'A short paragraph about yourself',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.info_outline),
+                      alignLabelWithHint: true,
+                    ),
+                    maxLines: 3,
+                    textInputAction: TextInputAction.next,
+                  ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: _emailController,
                     decoration: const InputDecoration(

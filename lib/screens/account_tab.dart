@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -46,6 +47,7 @@ class _AccountTabState extends State<AccountTab> {
 
   bool _isSavingUsername = false;
   bool _isSavingProfilePicture = false;
+  bool _isSavingBio = false;
   bool _isSavingEmail = false;
   bool _isSavingPassword = false;
 
@@ -164,6 +166,74 @@ class _AccountTabState extends State<AccountTab> {
       }
     } finally {
       if (mounted) setState(() => _isSavingUsername = false);
+    }
+  }
+
+  Future<void> _changeBio() async {
+    final controller = TextEditingController(text: widget.user.bio ?? '');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit bio'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Bio',
+            hintText: 'A short paragraph about yourself',
+            border: OutlineInputBorder(),
+            alignLabelWithHint: true,
+          ),
+          maxLines: 4,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final newBio = controller.text.trim();
+    if (newBio == (widget.user.bio ?? '')) return;
+
+    setState(() => _isSavingBio = true);
+
+    try {
+      await _firestoreService.updateUserProfile(
+        userId: widget.user.userId,
+        data: {
+          'bio': newBio.isEmpty ? FieldValue.delete() : newBio,
+        },
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bio updated'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update bio: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSavingBio = false);
     }
   }
 
@@ -618,6 +688,61 @@ class _AccountTabState extends State<AccountTab> {
                               onPressed:
                                   _isSavingUsername ? null : _changeUsername,
                               tooltip: 'Change username',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 120,
+                        child: Text(
+                          'Bio:',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                user.bio?.isNotEmpty == true
+                                    ? user.bio!
+                                    : 'No bio added',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontStyle: user.bio?.isNotEmpty == true
+                                      ? FontStyle.normal
+                                      : FontStyle.italic,
+                                  color: user.bio?.isNotEmpty == true
+                                      ? null
+                                      : Colors.grey,
+                                ),
+                                overflow: TextOverflow.clip,
+                                maxLines: 8,
+                              ),
+                            ),
+                            IconButton(
+                              icon: _isSavingBio
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.edit, size: 20),
+                              onPressed:
+                                  _isSavingBio ? null : _changeBio,
+                              tooltip: 'Edit bio',
                             ),
                           ],
                         ),

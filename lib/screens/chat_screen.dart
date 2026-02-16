@@ -8,6 +8,7 @@ import '../models/message_model.dart';
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../widgets/profile_avatar.dart';
+import '../widgets/profile_popup.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -34,11 +35,15 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _hasMore = true;
   bool _isSending = false;
   StreamSubscription<List<Message>>? _messagesSubscription;
+  DateTime? _lastTypingUpdateAt;
 
   static const int _pageSize = 10;
+  static const int _typingThresholdSeconds = 5;
   static const Color _myBubbleColor = Color(0xFF1D731D);
   static const Color _otherBubbleColor = Color(0xFF2929A2);
   static const Color _bubbleTextColor = Color(0xFFF0F8FF);
+
+  Timer? _typingCheckTimer;
 
   @override
   void initState() {
@@ -46,6 +51,12 @@ class _ChatScreenState extends State<ChatScreen> {
     _updateLastSeen();
     _loadInitialMessages();
     _scrollController.addListener(_onScroll);
+    _typingCheckTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) {
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   Future<void> _updateLastSeen() async {
@@ -57,6 +68,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _typingCheckTimer?.cancel();
     _messagesSubscription?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -64,26 +76,22 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _listenForNewMessages() {
+  void _listenToMessages() {
     _messagesSubscription?.cancel();
-    final newestAt = _messages.isNotEmpty
-        ? _messages.last.createdAt
+
+    final floor = _messages.isNotEmpty
+        ? _messages.first.createdAt
         : DateTime(1970);
     _messagesSubscription = _firestoreService
-        .messagesStream(
+        .messagesInRangeStream(
           connectionId: widget.connectionInfo.connectionId,
-          after: newestAt,
+          createdAtFloor: floor,
         )
-        .listen((newMessages) async {
-      if (newMessages.isEmpty || !mounted) return;
+        .listen((messages) async {
+      if (!mounted) return;
       setState(() {
-        final existingIds = _messages.map((m) => m.id).toSet();
-        for (final m in newMessages) {
-          if (!existingIds.contains(m.id)) {
-            _messages.add(m);
-            existingIds.add(m.id);
-          }
-        }
+        _messages.clear();
+        _messages.addAll(messages);
       });
       await _firestoreService.updateParticipantLastSeen(
         connectionId: widget.connectionInfo.connectionId,
@@ -92,11 +100,96 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _onTyping() {
+    final now = DateTime.now();
+    if (_lastTypingUpdateAt != null &&
+        now.difference(_lastTypingUpdateAt!).inSeconds < _typingThresholdSeconds) {
+      return;
+    }
+    _lastTypingUpdateAt = now;
+    _firestoreService.updateParticipantLastTyping(
+      connectionId: widget.connectionInfo.connectionId,
+      userId: widget.currentUser.userId,
+    );
+  }
+
+  static bool _isTypingRecently(Map<String, dynamic>? data) {
+    if (data == null) return false;
+    final lt = data['lastTyping'];
+    if (lt is! Timestamp) return false;
+    return DateTime.now().difference(lt.toDate()).inSeconds <
+        _typingThresholdSeconds;
+  }
+
   void _onScroll() {
     if (_scrollController.position.pixels >=
         _scrollController.position.maxScrollExtent - 100) {
       _loadMoreMessages();
     }
+  }
+
+  void _onTitleTap(BuildContext context) {
+    if (widget.connectionInfo.isGroup) {
+      _showGroupParticipants(context);
+    } else {
+      _showOtherUserProfile(context);
+    }
+  }
+
+  void _showOtherUserProfile(BuildContext context) async {
+    final data = await _firestoreService.getUserProfile(
+      widget.connectionInfo.otherUserId,
+    );
+    if (!context.mounted) return;
+    final user = data != null
+        ? User.fromFirestore(data, widget.connectionInfo.otherUserId)
+        : User(
+            userId: widget.connectionInfo.otherUserId,
+            email: '',
+            username: widget.connectionInfo.name,
+          );
+    showProfilePopup(context: context, user: user);
+  }
+
+  void _showGroupParticipants(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                '${widget.connectionInfo.name} - Participants',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                controller: scrollController,
+                shrinkWrap: true,
+                itemCount: widget.connectionInfo.participantIds.length,
+                itemBuilder: (context, index) {
+                  final userId =
+                      widget.connectionInfo.participantIds[index];
+                  return _ChatParticipantTile(
+                    userId: userId,
+                    firestoreService: _firestoreService,
+                    isCurrentUser: userId == widget.currentUser.userId,
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _loadInitialMessages() async {
@@ -111,7 +204,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _oldestDoc = result.oldestDoc;
       _hasMore = result.messages.length >= _pageSize;
     });
-    _listenForNewMessages();
+    _listenToMessages();
   }
 
   Future<void> _loadMoreMessages() async {
@@ -133,6 +226,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _messages.insertAll(0, result.messages.reversed);
         _oldestDoc = result.oldestDoc;
         _hasMore = result.messages.length >= _pageSize;
+        _listenToMessages();
       }
     });
   }
@@ -174,107 +268,161 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: widget.connectionInfo.isGroup
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CircleAvatar(
-                    radius: 18,
-                    backgroundImage: AssetImage('assets/default.png'),
-                  ),
-                  const SizedBox(width: 12),
-                  Flexible(
-                    child: Text(
-                      widget.connectionInfo.name,
-                      overflow: TextOverflow.ellipsis,
+        title: GestureDetector(
+          onTap: () => _onTitleTap(context),
+          child: widget.connectionInfo.isGroup
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircleAvatar(
+                      radius: 18,
+                      backgroundImage: AssetImage('assets/default.png'),
                     ),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        widget.connectionInfo.name,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                )
+              : StreamBuilder<Map<String, dynamic>?>(
+                  stream: _firestoreService.userProfileStream(
+                    widget.connectionInfo.otherUserId,
                   ),
-                ],
-              )
-            : StreamBuilder<Map<String, dynamic>?>(
-                stream: _firestoreService.userProfileStream(
-                  widget.connectionInfo.otherUserId,
-                ),
-                builder: (context, snapshot) {
-                  final otherUser = snapshot.hasData && snapshot.data != null
-                      ? User.fromFirestore(
-                          snapshot.data!,
-                          widget.connectionInfo.otherUserId,
-                        )
-                      : User(
-                          userId: widget.connectionInfo.otherUserId,
-                          email: '',
-                          username: widget.connectionInfo.name,
-                        );
-                  return Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ProfileAvatar(
-                        user: otherUser,
-                        radius: 18,
-                      ),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          otherUser.username,
-                          overflow: TextOverflow.ellipsis,
+                  builder: (context, snapshot) {
+                    final otherUser = snapshot.hasData && snapshot.data != null
+                        ? User.fromFirestore(
+                            snapshot.data!,
+                            widget.connectionInfo.otherUserId,
+                          )
+                        : User(
+                            userId: widget.connectionInfo.otherUserId,
+                            email: '',
+                            username: widget.connectionInfo.name,
+                          );
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ProfileAvatar(
+                          user: otherUser,
+                          radius: 18,
                         ),
-                      ),
-                    ],
-                  );
-                },
-              ),
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Text(
+                            otherUser.username,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+        ),
         centerTitle: true,
       ),
       body: Column(
         children: [
           Expanded(
             child: widget.connectionInfo.isGroup
-              ? _buildMessagesList(
-                  otherLastSeen: null,
-                  otherUser: User(
-                    userId: '',
-                    email: '',
-                    username: widget.connectionInfo.name,
-                  ),
-                )
-              : StreamBuilder<Map<String, dynamic>?>(
-                  stream: _firestoreService.participantStream(
-                    connectionId: widget.connectionInfo.connectionId,
-                    userId: widget.connectionInfo.otherUserId,
-                  ),
-                  builder: (context, participantSnapshot) {
-                    final participantData = participantSnapshot.data;
-                    final lastSeenTs = participantData?['lastSeen'];
-                    final DateTime? otherLastSeen = lastSeenTs is Timestamp
-                        ? lastSeenTs.toDate()
-                        : null;
+                ? StreamBuilder<Map<String, Map<String, dynamic>>>(
+                    stream: _firestoreService.participantsStream(
+                      connectionId: widget.connectionInfo.connectionId,
+                    ),
+                    builder: (context, participantsSnapshot) {
+                      final participants =
+                          participantsSnapshot.data ?? <String, Map<String, dynamic>>{};
+                      final typingIds = participants.entries
+                          .where((e) => e.key != widget.currentUser.userId)
+                          .where((e) => _isTypingRecently(e.value))
+                          .map((e) => e.key)
+                          .toList();
 
-                    return StreamBuilder<Map<String, dynamic>?>(
-                      stream: _firestoreService.userProfileStream(
-                        widget.connectionInfo.otherUserId,
-                      ),
-                      builder: (context, userSnapshot) {
-                        final otherUser = userSnapshot.hasData &&
-                                userSnapshot.data != null
-                            ? User.fromFirestore(
-                                userSnapshot.data!,
-                                widget.connectionInfo.otherUserId,
-                              )
-                            : User(
-                                userId: widget.connectionInfo.otherUserId,
+                      return Column(
+                        children: [
+                          Expanded(
+                            child: _buildMessagesList(
+                              otherLastSeen: null,
+                              otherUser: User(
+                                userId: '',
                                 email: '',
                                 username: widget.connectionInfo.name,
-                              );
+                              ),
+                            ),
+                          ),
+                          if (typingIds.isNotEmpty)
+                            _TypingIndicator(
+                              firestoreService: _firestoreService,
+                              typingUserIds: typingIds,
+                            ),
+                        ],
+                      );
+                    },
+                  )
+                : StreamBuilder<Map<String, dynamic>?>(
+                    stream: _firestoreService.participantStream(
+                      connectionId: widget.connectionInfo.connectionId,
+                      userId: widget.connectionInfo.otherUserId,
+                    ),
+                    builder: (context, participantSnapshot) {
+                      final participantData = participantSnapshot.data;
+                      final lastSeenTs = participantData?['lastSeen'];
+                      final DateTime? otherLastSeen = lastSeenTs is Timestamp
+                          ? lastSeenTs.toDate()
+                          : null;
+                      final otherIsTyping =
+                          _isTypingRecently(participantData);
 
-                        return _buildMessagesList(
-                          otherLastSeen: otherLastSeen,
-                          otherUser: otherUser,
-                        );
-                      },
-                    );
-                  },
-                ),
+                      return StreamBuilder<Map<String, dynamic>?>(
+                        stream: _firestoreService.userProfileStream(
+                          widget.connectionInfo.otherUserId,
+                        ),
+                        builder: (context, userSnapshot) {
+                          final otherUser = userSnapshot.hasData &&
+                                  userSnapshot.data != null
+                              ? User.fromFirestore(
+                                  userSnapshot.data!,
+                                  widget.connectionInfo.otherUserId,
+                                )
+                              : User(
+                                  userId: widget.connectionInfo.otherUserId,
+                                  email: '',
+                                  username: widget.connectionInfo.name,
+                                );
+
+                          return Column(
+                            children: [
+                              Expanded(
+                                child: _buildMessagesList(
+                                  otherLastSeen: otherLastSeen,
+                                  otherUser: otherUser,
+                                ),
+                              ),
+                              if (otherIsTyping)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      '${otherUser.username} is typing',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(color: Colors.grey),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  ),
           ),
           _buildInputArea(),
         ],
@@ -527,6 +675,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               maxLines: null,
               textInputAction: TextInputAction.send,
+              onChanged: (_) => _onTyping(),
               onSubmitted: (_) => _sendMessage(),
             ),
           ),
@@ -546,6 +695,127 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _TypingIndicator extends StatefulWidget {
+  const _TypingIndicator({
+    required this.firestoreService,
+    required this.typingUserIds,
+  });
+
+  final FirestoreService firestoreService;
+  final List<String> typingUserIds;
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator> {
+  Map<String, String>? _usernames;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUsernames();
+  }
+
+  @override
+  void didUpdateWidget(_TypingIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.typingUserIds != widget.typingUserIds) {
+      _loadUsernames();
+    }
+  }
+
+  Future<void> _loadUsernames() async {
+    final map = await widget.firestoreService
+        .getUsernamesForUsers(widget.typingUserIds);
+    if (mounted) {
+      setState(() {
+        _usernames = map;
+        _loaded = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded || _usernames == null || widget.typingUserIds.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final names = widget.typingUserIds
+        .map((id) => _usernames![id] ?? id)
+        .toList();
+    final text = names.length == 1
+        ? '${names[0]} is typing'
+        : '${names.join(', ')} are typing';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          text,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Colors.grey,
+              ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatParticipantTile extends StatelessWidget {
+  const _ChatParticipantTile({
+    required this.userId,
+    required this.firestoreService,
+    required this.isCurrentUser,
+  });
+
+  final String userId;
+  final FirestoreService firestoreService;
+  final bool isCurrentUser;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: firestoreService.getUserProfile(userId),
+      builder: (context, snapshot) {
+        final user = snapshot.hasData && snapshot.data != null
+            ? User.fromFirestore(snapshot.data!, userId)
+            : User(userId: userId, email: '', username: userId);
+
+        return ListTile(
+          leading: ProfileAvatar(user: user, radius: 24),
+          title: Row(
+            children: [
+              Text(user.username),
+              if (isCurrentUser)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Text(
+                    '(you)',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey,
+                        ),
+                  ),
+                ),
+            ],
+          ),
+          trailing: isCurrentUser
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.person),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    showProfilePopup(context: context, user: user);
+                  },
+                  tooltip: 'View profile',
+                ),
+        );
+      },
     );
   }
 }

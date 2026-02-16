@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../widgets/profile_avatar.dart';
+import '../widgets/profile_popup.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key, required this.user});
@@ -176,6 +177,7 @@ class _HomeTabState extends State<HomeTab> {
             const SizedBox(height: 12),
             _UserSearchResultTile(
               user: _foundUser!,
+              onTap: () => showProfilePopup(context: context, user: _foundUser!),
               onInvite: () => _sendInvite(_foundUser!),
             ),
           ],
@@ -188,10 +190,12 @@ class _HomeTabState extends State<HomeTab> {
 class _UserSearchResultTile extends StatelessWidget {
   const _UserSearchResultTile({
     required this.user,
+    required this.onTap,
     required this.onInvite,
   });
 
   final User user;
+  final VoidCallback onTap;
   final VoidCallback onInvite;
 
   @override
@@ -203,6 +207,7 @@ class _UserSearchResultTile extends StatelessWidget {
           radius: 24,
         ),
         title: Text(user.username),
+        onTap: onTap,
         trailing: FilledButton.icon(
           onPressed: onInvite,
           icon: const Icon(Icons.person_add, size: 18),

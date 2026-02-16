@@ -4,14 +4,30 @@ A new Flutter project.
 
 ## Firebase Storage CORS (for web)
 
-Profile pictures from Firebase Storage may not load on web due to CORS. To fix:
+Profile pictures work on Android but show the default on web because browsers block cross-origin image requests (CORS). To fix:
 
-1. Create or use the `storage_cors.json` in this project.
-2. Apply it to your Storage bucket:
+1. **Install Google Cloud CLI** if needed: https://cloud.google.com/sdk/docs/install
+
+2. **Log in and set project**:
    ```bash
-   gcloud storage buckets update gs://YOUR_PROJECT_ID.appspot.com --cors-file=storage_cors.json
+   gcloud auth login
+   gcloud config set project web-messenger-10d20
    ```
-   Replace `YOUR_PROJECT_ID` with your Firebase project ID (e.g. `web-messenger-10d20`).
+
+3. **Find your Storage bucket name** in Firebase Console → Storage → bucket URL (e.g. `web-messenger-10d20.firebasestorage.app` or `web-messenger-10d20.appspot.com`).
+
+4. **Apply CORS** (use your actual bucket name):
+   ```bash
+   gcloud storage buckets update gs://web-messenger-10d20.appspot.com --cors-file=storage_cors.json
+   ```
+   If your bucket is `web-messenger-10d20.firebasestorage.app`, use that instead.
+
+5. **Verify** (optional):
+   ```bash
+   gcloud storage buckets describe gs://web-messenger-10d20.appspot.com --format="default(cors_config)"
+   ```
+
+6. **Hard refresh** the web app (Ctrl+Shift+R) after applying CORS.
 
 For production, restrict `origin` in `storage_cors.json` to your domain instead of `["*"]`.
 

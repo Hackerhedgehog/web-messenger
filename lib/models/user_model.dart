@@ -5,6 +5,7 @@ class User {
   final String email;
   final String username;
   final String? profilePictureUrl;
+  final String? bio;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final Map<String, dynamic>? additionalData;
@@ -14,6 +15,7 @@ class User {
     required this.email,
     required this.username,
     this.profilePictureUrl,
+    this.bio,
     this.createdAt,
     this.updatedAt,
     this.additionalData,
@@ -26,6 +28,7 @@ class User {
       email: data['email'] as String? ?? '',
       username: data['username'] as String? ?? '',
       profilePictureUrl: data['profilePictureUrl'] as String?,
+      bio: data['bio'] as String?,
       createdAt: data['createdAt'] != null
           ? (data['createdAt'] as Timestamp).toDate()
           : null,
@@ -44,6 +47,7 @@ class User {
       'email',
       'username',
       'profilePictureUrl',
+      'bio',
       'createdAt',
       'updatedAt',
     };
@@ -65,6 +69,7 @@ class User {
       'email': email,
       'username': username,
       'profilePictureUrl': profilePictureUrl,
+      'bio': bio,
       'createdAt': createdAt?.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
       if (additionalData != null) ...additionalData!,

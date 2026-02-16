@@ -4,6 +4,7 @@ import 'package:async/async.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/connection_info.dart';
+import '../models/group_invite_info.dart';
 import '../models/message_model.dart';
 
 class _InviteEntry {
@@ -27,6 +28,7 @@ class FirestoreService {
     required String email,
     required String username,
     String? profilePictureUrl,
+    String? bio,
   }) async {
     try {
       final data = <String, dynamic>{
@@ -37,6 +39,9 @@ class FirestoreService {
       };
       if (profilePictureUrl != null && profilePictureUrl.isNotEmpty) {
         data['profilePictureUrl'] = profilePictureUrl;
+      }
+      if (bio != null && bio.trim().isNotEmpty) {
+        data['bio'] = bio.trim();
       }
       await _firestore.collection('users').doc(userId).set(data);
     } catch (e) {
@@ -54,6 +59,24 @@ class FirestoreService {
       return null;
     } catch (e) {
       throw 'Failed to get user profile: $e';
+    }
+  }
+
+  /// Fetches usernames for the given user IDs. Returns userId -> username map.
+  Future<Map<String, String>> getUsernamesForUsers(List<String> userIds) async {
+    if (userIds.isEmpty) return {};
+    try {
+      final results = await Future.wait(
+        userIds.map((id) => _firestore.collection('users').doc(id).get()),
+      );
+      final map = <String, String>{};
+      for (var i = 0; i < userIds.length; i++) {
+        final data = results[i].data();
+        map[userIds[i]] = data?['username'] as String? ?? userIds[i];
+      }
+      return map;
+    } catch (e) {
+      return {for (final id in userIds) id: id};
     }
   }
 
@@ -231,11 +254,9 @@ class FirestoreService {
     });
 
     transaction.set(connectionRef.collection('participants').doc(userId1), {
-      'isTyping': false,
       'lastSeen': now,
     });
     transaction.set(connectionRef.collection('participants').doc(userId2), {
-      'isTyping': false,
       'lastSeen': now,
     });
   }
@@ -254,6 +275,27 @@ class FirestoreService {
           .doc(userId)
           .set({
         'lastSeen': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      // Silently ignore - participant may have left the connection
+    }
+  }
+
+  /// Updates the participant's lastTyping timestamp. Call when user types in
+  /// the chat input. Client should throttle to only call when last update was
+  /// more than 5 seconds ago.
+  Future<void> updateParticipantLastTyping({
+    required String connectionId,
+    required String userId,
+  }) async {
+    try {
+      await _firestore
+          .collection('connections')
+          .doc(connectionId)
+          .collection('participants')
+          .doc(userId)
+          .set({
+        'lastTyping': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
       // Silently ignore - participant may have left the connection
@@ -308,6 +350,89 @@ class FirestoreService {
     } catch (e) {
       throw 'Failed to decline invite: $e';
     }
+  }
+
+  /// Stream of all invites (1:1 and group) for the Invites tab.
+  /// Listens to user doc. groupInvites is `Map<groupId, timestamp>`.
+  /// Fetches connection for each group invite. Sorted by timestamp (newest first).
+  Stream<({List<String> senderIds, List<GroupInviteInfo> groupInvites})>
+      allInvitesStream(String userId) {
+    return _firestore
+        .collection('users')
+        .doc(userId)
+        .snapshots()
+        .asyncMap((doc) async {
+      if (!doc.exists) {
+        return (senderIds: <String>[], groupInvites: <GroupInviteInfo>[]);
+      }
+      final data = doc.data() ?? {};
+
+      final inviteEntries = <_InviteEntry>[];
+      final invites = data['invites'];
+      if (invites is Map) {
+        for (final e in invites.entries) {
+          final senderId = e.key.toString();
+          final ts = e.value is Timestamp ? e.value as Timestamp : null;
+          inviteEntries.add(_InviteEntry(senderId, ts));
+        }
+      }
+      inviteEntries.sort((a, b) {
+        if (a.timestamp == null && b.timestamp == null) return 0;
+        if (a.timestamp == null) return 1;
+        if (b.timestamp == null) return -1;
+        return b.timestamp!.compareTo(a.timestamp!);
+      });
+      final senderIds = inviteEntries.map((e) => e.senderId).toList();
+
+      final groupInvites = <GroupInviteInfo>[];
+      final groupInvitesData = data['groupInvites'];
+      if (groupInvitesData is Map) {
+        for (final e in groupInvitesData.entries) {
+          final groupId = e.key.toString();
+          final ts = e.value is Timestamp ? e.value as Timestamp : null;
+          try {
+            final connDoc = await _firestore
+                .collection('connections')
+                .doc(groupId)
+                .get();
+            if (connDoc.exists) {
+              final connData = connDoc.data() ?? {};
+              groupInvites.add(GroupInviteInfo.fromConnection(
+                groupId,
+                connData,
+                ts,
+              ));
+            }
+          } catch (_) {
+            // Skip if connection not found
+          }
+        }
+        groupInvites.sort((a, b) {
+          final ta = a.timestamp;
+          final tb = b.timestamp;
+          if (ta == null && tb == null) return 0;
+          if (ta == null) return 1;
+          if (tb == null) return -1;
+          return tb.compareTo(ta);
+        });
+      }
+
+      return (senderIds: senderIds, groupInvites: groupInvites);
+    });
+  }
+
+  /// Stream of total invite count (1:1 + group invites) for badge display.
+  Stream<int> totalInviteCountStream(String userId) {
+    return _firestore.collection('users').doc(userId).snapshots().map((doc) {
+      if (!doc.exists) return 0;
+      final data = doc.data() ?? {};
+      var count = 0;
+      final invites = data['invites'];
+      if (invites is Map) count += invites.length;
+      final groupInvites = data['groupInvites'];
+      if (groupInvites is Map) count += groupInvites.length;
+      return count;
+    });
   }
 
   /// Stream of invite sender user IDs for the given user, newest first.
@@ -500,9 +625,11 @@ class FirestoreService {
     return connections.keys.map((e) => e.toString()).toList();
   }
 
-  /// Creates a group connection. [creatorUserId] creates the group with
-  /// [selectedUserIds] (must be connected with creator). [name] is required.
-  Future<String> createGroupConnection({
+  /// Sends group invites from [creatorUserId] to [selectedUserIds].
+  /// Creates connection immediately with only creator as participant.
+  /// groupInvites on receivers: `Map<groupId, timestamp>` (like regular invites).
+  /// Returns the generated groupId.
+  Future<String> sendGroupInvites({
     required String creatorUserId,
     required List<String> selectedUserIds,
     required String name,
@@ -512,11 +639,6 @@ class FirestoreService {
     }
     if (selectedUserIds.isEmpty) {
       throw 'Select at least one participant';
-    }
-
-    final allParticipantIds = {creatorUserId, ...selectedUserIds}.toList();
-    if (allParticipantIds.length < 2) {
-      throw 'Select at least one other participant';
     }
 
     final connectedIds = await getConnectedUserIds(creatorUserId);
@@ -539,20 +661,25 @@ class FirestoreService {
           'name': name.trim(),
           'lastMessage': now,
           'type': 'group',
+          'creatorId': creatorUserId,
         });
-
-        for (final pid in allParticipantIds) {
+        transaction.set(
+          connectionRef.collection('participants').doc(creatorUserId),
+          {'lastSeen': now},
+        );
+        transaction.set(
+          _firestore.collection('users').doc(creatorUserId),
+          {
+            'groupConnections.$groupId': now,
+            'updatedAt': now,
+          },
+          SetOptions(merge: true),
+        );
+        for (final receiverId in selectedUserIds) {
           transaction.set(
-            connectionRef.collection('participants').doc(pid),
-            {'isTyping': false, 'lastSeen': now},
-          );
-        }
-
-        for (final pid in allParticipantIds) {
-          transaction.set(
-            _firestore.collection('users').doc(pid),
+            _firestore.collection('users').doc(receiverId),
             {
-              'groupConnections.$groupId': now,
+              'groupInvites.$groupId': now,
               'updatedAt': now,
             },
             SetOptions(merge: true),
@@ -562,7 +689,108 @@ class FirestoreService {
 
       return groupId;
     } catch (e) {
-      throw 'Failed to create group: $e';
+      throw 'Failed to send group invites: $e';
+    }
+  }
+
+  /// Stream of group invites for the given user.
+  /// groupInvites is `Map<groupId, timestamp>`. Fetches connection for each.
+  Stream<List<GroupInviteInfo>> groupInvitesStream(String userId) {
+    return _firestore
+        .collection('users')
+        .doc(userId)
+        .snapshots()
+        .asyncMap((doc) async {
+      if (!doc.exists) return <GroupInviteInfo>[];
+      final data = doc.data() ?? {};
+      final groupInvitesData = data['groupInvites'];
+      if (groupInvitesData is! Map) return <GroupInviteInfo>[];
+      final list = <GroupInviteInfo>[];
+      for (final e in groupInvitesData.entries) {
+        final groupId = e.key.toString();
+        final ts = e.value is Timestamp ? e.value as Timestamp : null;
+        try {
+          final connDoc =
+              await _firestore.collection('connections').doc(groupId).get();
+          if (connDoc.exists) {
+            list.add(GroupInviteInfo.fromConnection(
+              groupId,
+              connDoc.data() ?? {},
+              ts,
+            ));
+          }
+        } catch (_) {
+          // Skip if connection not found
+        }
+      }
+      list.sort((a, b) {
+        final ta = a.timestamp;
+        final tb = b.timestamp;
+        if (ta == null && tb == null) return 0;
+        if (ta == null) return 1;
+        if (tb == null) return -1;
+        return tb.compareTo(ta);
+      });
+      return list;
+    });
+  }
+
+  /// Accepts a group invite. Connection already exists (created on send).
+  /// Adds receiver to participants and removes invite.
+  Future<void> acceptGroupInvite({
+    required String receiverUserId,
+    required String groupId,
+  }) async {
+    try {
+      final userDoc =
+          await _firestore.collection('users').doc(receiverUserId).get();
+      if (!userDoc.exists) throw 'User not found';
+      final data = userDoc.data() ?? {};
+      final groupInvites = data['groupInvites'];
+      if (groupInvites is! Map || !groupInvites.containsKey(groupId)) {
+        throw 'Group invite not found';
+      }
+
+      final connRef =
+          _firestore.collection('connections').doc(groupId);
+      final connDoc = await connRef.get();
+      if (!connDoc.exists) {
+        throw 'Group no longer exists';
+      }
+
+      final now = FieldValue.serverTimestamp();
+
+      await _firestore.runTransaction((transaction) async {
+        transaction.set(
+          connRef.collection('participants').doc(receiverUserId),
+          {'lastSeen': now},
+        );
+        transaction.update(
+          _firestore.collection('users').doc(receiverUserId),
+          {
+            'groupConnections.$groupId': now,
+            'groupInvites.$groupId': FieldValue.delete(),
+            'updatedAt': now,
+          },
+        );
+      });
+    } catch (e) {
+      throw 'Failed to accept group invite: $e';
+    }
+  }
+
+  /// Declines a group invite.
+  Future<void> declineGroupInvite({
+    required String receiverUserId,
+    required String groupId,
+  }) async {
+    try {
+      await _firestore.collection('users').doc(receiverUserId).update({
+        'groupInvites.$groupId': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw 'Failed to decline group invite: $e';
     }
   }
 
@@ -729,6 +957,7 @@ class FirestoreService {
   }
 
   /// Removes invites sent by [userId] from all other users' invite maps.
+  /// Includes 1:1 invites and group invites where [userId] is the creator.
   /// Call before deleting the user profile.
   Future<void> removeInvitesSentByUser(String userId) async {
     final usersSnapshot = await _firestore.collection('users').get();
@@ -738,13 +967,40 @@ class FirestoreService {
     for (final doc in usersSnapshot.docs) {
       if (doc.id == userId) continue;
       final data = doc.data();
+      final updates = <String, dynamic>{
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
       final invites = data['invites'];
       if (invites is Map && invites.containsKey(userId)) {
-        batch.update(doc.reference, {
-          'invites.$userId': FieldValue.delete(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
+        updates['invites.$userId'] = FieldValue.delete();
         hasWrites = true;
+      }
+
+      final groupInvites = data['groupInvites'];
+      if (groupInvites is Map) {
+        for (final e in groupInvites.entries) {
+          final groupId = e.key.toString();
+          try {
+            final connDoc = await _firestore
+                .collection('connections')
+                .doc(groupId)
+                .get();
+            if (connDoc.exists) {
+              final connData = connDoc.data() ?? {};
+              if (connData['creatorId'] == userId) {
+                updates['groupInvites.$groupId'] = FieldValue.delete();
+                hasWrites = true;
+              }
+            }
+          } catch (_) {
+            // Skip if connection not found
+          }
+        }
+      }
+
+      if (updates.length > 1) {
+        batch.update(doc.reference, updates);
       }
     }
 
@@ -881,7 +1137,7 @@ class FirestoreService {
     return (messages: messages, oldestDoc: oldestDoc);
   }
 
-  /// Stream of a participant's data (lastSeen, isTyping) for a connection.
+  /// Stream of a participant's data (lastSeen, lastTyping) for a connection.
   Stream<Map<String, dynamic>?> participantStream({
     required String connectionId,
     required String userId,
@@ -893,6 +1149,25 @@ class FirestoreService {
         .doc(userId)
         .snapshots()
         .map((doc) => doc.exists ? doc.data() : null);
+  }
+
+  /// Stream of all participants' data for a connection. Use for real-time
+  /// typing indicators in group chats.
+  Stream<Map<String, Map<String, dynamic>>> participantsStream({
+    required String connectionId,
+  }) {
+    return _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('participants')
+        .snapshots()
+        .map((snapshot) {
+          final map = <String, Map<String, dynamic>>{};
+          for (final doc in snapshot.docs) {
+            map[doc.id] = doc.data();
+          }
+          return map;
+        });
   }
 
   /// Stream of new messages (createdAt > [after]). Use for real-time updates.
@@ -913,5 +1188,23 @@ class FirestoreService {
 
     return query.snapshots().map((snapshot) =>
         snapshot.docs.map((d) => Message.fromFirestore(d)).toList());
+  }
+
+  /// Stream of messages where createdAt >= [createdAtFloor]. Listens for
+  /// changes including edits and deletes. Use for real-time updates while
+  /// chat is open.
+  Stream<List<Message>> messagesInRangeStream({
+    required String connectionId,
+    required DateTime createdAtFloor,
+  }) {
+    return _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('messages')
+        .orderBy('createdAt', descending: false)
+        .startAt([Timestamp.fromDate(createdAtFloor)])
+        .snapshots()
+        .map((snapshot) =>
+            snapshot.docs.map((d) => Message.fromFirestore(d)).toList());
   }
 }

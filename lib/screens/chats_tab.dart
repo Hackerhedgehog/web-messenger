@@ -4,6 +4,7 @@ import '../models/connection_info.dart';
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../widgets/profile_avatar.dart';
+import '../widgets/profile_popup.dart';
 import 'chat_screen.dart';
 import 'choose_participants_screen.dart';
 
@@ -108,6 +109,7 @@ class ChatsTab extends StatelessWidget {
                 return _ConnectionTile(
                   currentUser: user,
                   connectionInfo: conn,
+                  firestoreService: firestoreService,
                   onRemoveConnection: conn.isGroup
                       ? null
                       : () => _showRemoveConnectionDialog(
@@ -146,17 +148,101 @@ class _ConnectionTile extends StatelessWidget {
   const _ConnectionTile({
     required this.currentUser,
     required this.connectionInfo,
+    required this.firestoreService,
     required this.onRemoveConnection,
   });
 
   final User currentUser;
   final ConnectionInfo connectionInfo;
+  final FirestoreService firestoreService;
   final VoidCallback? onRemoveConnection;
+
+  void _showContextMenu(BuildContext context) {
+    if (connectionInfo.isGroup) {
+      _showGroupParticipants(context);
+      return;
+    }
+    if (onRemoveConnection == null) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.person),
+              title: const Text('View profile'),
+              onTap: () {
+                Navigator.pop(context);
+                _showOtherUserProfile(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.link_off, color: Colors.red),
+              title: const Text('Remove connection', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(context);
+                onRemoveConnection!();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showOtherUserProfile(BuildContext context) async {
+    final data = await firestoreService.getUserProfile(connectionInfo.otherUserId);
+    if (!context.mounted) return;
+    final user = data != null
+        ? User.fromFirestore(data, connectionInfo.otherUserId)
+        : User(userId: connectionInfo.otherUserId, email: '', username: connectionInfo.name);
+    showProfilePopup(context: context, user: user);
+  }
+
+  void _showGroupParticipants(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                '${connectionInfo.name} - Participants',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                controller: scrollController,
+                shrinkWrap: true,
+                itemCount: connectionInfo.participantIds.length,
+                itemBuilder: (context, index) {
+                  final userId = connectionInfo.participantIds[index];
+                  return _ParticipantProfileTile(
+                    userId: userId,
+                    firestoreService: firestoreService,
+                    isCurrentUser: userId == currentUser.userId,
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final firestoreService = FirestoreService();
-
     if (connectionInfo.isGroup) {
       return GestureDetector(
         onTap: () {
@@ -169,6 +255,7 @@ class _ConnectionTile extends StatelessWidget {
             ),
           );
         },
+        onLongPress: () => _showContextMenu(context),
         child: Card(
           child: ListTile(
             leading: const CircleAvatar(
@@ -214,7 +301,7 @@ class _ConnectionTile extends StatelessWidget {
                 ),
               );
             },
-            onLongPress: onRemoveConnection,
+            onLongPress: () => _showContextMenu(context),
             child: Card(
               child: ListTile(
                 leading: ProfileAvatar(
@@ -240,7 +327,7 @@ class _ConnectionTile extends StatelessWidget {
           ),
         );
       },
-      onLongPress: onRemoveConnection,
+      onLongPress: onRemoveConnection != null ? () => _showContextMenu(context) : null,
       child: Card(
         child: ListTile(
           leading: const CircleAvatar(
@@ -250,6 +337,59 @@ class _ConnectionTile extends StatelessWidget {
           title: Text(connectionInfo.name),
         ),
       ),
+    );
+  }
+}
+
+class _ParticipantProfileTile extends StatelessWidget {
+  const _ParticipantProfileTile({
+    required this.userId,
+    required this.firestoreService,
+    required this.isCurrentUser,
+  });
+
+  final String userId;
+  final FirestoreService firestoreService;
+  final bool isCurrentUser;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: firestoreService.getUserProfile(userId),
+      builder: (context, snapshot) {
+        final user = snapshot.hasData && snapshot.data != null
+            ? User.fromFirestore(snapshot.data!, userId)
+            : User(userId: userId, email: '', username: userId);
+
+        return ListTile(
+          leading: ProfileAvatar(user: user, radius: 24),
+          title: Row(
+            children: [
+              Text(user.username),
+              if (isCurrentUser)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Text(
+                    '(you)',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey,
+                        ),
+                  ),
+                ),
+            ],
+          ),
+          trailing: isCurrentUser
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.person),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    showProfilePopup(context: context, user: user);
+                  },
+                  tooltip: 'View profile',
+                ),
+        );
+      },
     );
   }
 }

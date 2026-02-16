@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/group_invite_info.dart';
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../widgets/profile_avatar.dart';
@@ -71,12 +72,75 @@ class InvitesTab extends StatelessWidget {
     }
   }
 
+  Future<void> _acceptGroupInvite(
+    BuildContext context,
+    FirestoreService firestoreService,
+    String receiverUserId,
+    String groupId,
+  ) async {
+    try {
+      await firestoreService.acceptGroupInvite(
+        receiverUserId: receiverUserId,
+        groupId: groupId,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Group invite accepted'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to accept group invite: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _declineGroupInvite(
+    BuildContext context,
+    FirestoreService firestoreService,
+    String receiverUserId,
+    String groupId,
+  ) async {
+    try {
+      await firestoreService.declineGroupInvite(
+        receiverUserId: receiverUserId,
+        groupId: groupId,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Group invite declined'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to decline group invite: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final firestoreService = FirestoreService();
 
-    return StreamBuilder<List<String>>(
-      stream: firestoreService.inviteSendersStream(user.userId),
+    return StreamBuilder<
+        ({List<String> senderIds, List<GroupInviteInfo> groupInvites})>(
+      stream: firestoreService.allInvitesStream(user.userId),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -91,9 +155,10 @@ class InvitesTab extends StatelessWidget {
           );
         }
 
-        final senderIds = snapshot.data ?? [];
+        final senderIds = snapshot.data?.senderIds ?? [];
+        final groupInvites = snapshot.data?.groupInvites ?? [];
 
-        if (senderIds.isEmpty) {
+        if (senderIds.isEmpty && groupInvites.isEmpty) {
           return const Center(
             child: Text(
               'No invite requests',
@@ -104,24 +169,44 @@ class InvitesTab extends StatelessWidget {
 
         return ListView.separated(
           padding: const EdgeInsets.all(24.0),
-          itemCount: senderIds.length,
+          itemCount: senderIds.length + groupInvites.length,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
-            return _InviteTile(
-              senderUserId: senderIds[index],
-              onAccept: () => _acceptInvite(
-                context,
-                firestoreService,
-                user.userId,
-                senderIds[index],
-              ),
-              onDecline: () => _declineInvite(
-                context,
-                firestoreService,
-                user.userId,
-                senderIds[index],
-              ),
-            );
+            if (index < senderIds.length) {
+              final senderId = senderIds[index];
+              return _InviteTile(
+                senderUserId: senderId,
+                onAccept: () => _acceptInvite(
+                  context,
+                  firestoreService,
+                  user.userId,
+                  senderId,
+                ),
+                onDecline: () => _declineInvite(
+                  context,
+                  firestoreService,
+                  user.userId,
+                  senderId,
+                ),
+              );
+            } else {
+              final invite = groupInvites[index - senderIds.length];
+              return _GroupInviteTile(
+                invite: invite,
+                onAccept: () => _acceptGroupInvite(
+                  context,
+                  firestoreService,
+                  user.userId,
+                  invite.groupId,
+                ),
+                onDecline: () => _declineGroupInvite(
+                  context,
+                  firestoreService,
+                  user.userId,
+                  invite.groupId,
+                ),
+              );
+            }
           },
         );
       },
@@ -189,6 +274,56 @@ class _InviteTile extends StatelessWidget {
               radius: 24,
             ),
             title: Text(user.username),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton(
+                  onPressed: onAccept,
+                  child: const Text('Accept'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: onDecline,
+                  child: const Text('Decline'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _GroupInviteTile extends StatelessWidget {
+  const _GroupInviteTile({
+    required this.invite,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  final GroupInviteInfo invite;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final firestoreService = FirestoreService();
+
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: firestoreService.getUserProfile(invite.creatorId),
+      builder: (context, snapshot) {
+        final creatorName = snapshot.hasData && snapshot.data != null
+            ? (snapshot.data!['username'] as String? ?? invite.creatorId)
+            : invite.creatorId;
+
+        return Card(
+          child: ListTile(
+            leading: const CircleAvatar(
+              child: Icon(Icons.group),
+            ),
+            title: Text(invite.groupName),
+            subtitle: Text('$creatorName wants to add you to this group'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [

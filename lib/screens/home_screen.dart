@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -234,89 +235,66 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  Widget _buildTabBar(bool showChatBadge, bool showInviteBadge) {
+    return TabBar(
+      controller: _tabController,
+      tabs: [
+        const Tab(text: 'Home', icon: Icon(Icons.home)),
+        Tab(
+          text: 'Chats',
+          icon: Badge(
+            isLabelVisible: showChatBadge,
+            child: const Icon(Icons.chat),
+          ),
+        ),
+        Tab(
+          text: 'Invites',
+          icon: Badge(
+            isLabelVisible: showInviteBadge,
+            child: const Icon(Icons.mail),
+          ),
+        ),
+        const Tab(text: 'Account', icon: Icon(Icons.person)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('JoinTheFun'),
-        automaticallyImplyLeading: false,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _handleLogout,
-            tooltip: 'Logout',
-          ),
-        ],
-      ),
-      body: Consumer<UserProvider>(
-        builder: (context, userProvider, child) {
-          return UserDataGate(
-            isLoading: userProvider.isLoading,
-            error: userProvider.error,
-            user: userProvider.currentUser,
-            child: (user) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  StreamBuilder<List<String>>(
-                    stream: _firestoreService.inviteSendersStream(user.userId),
-                    builder: (context, inviteSnapshot) {
-                      final inviteCount =
-                          inviteSnapshot.data?.length ?? 0;
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        _onInviteCountChanged(inviteCount);
-                      });
-                      return StreamBuilder<List<ConnectionInfo>>(
-                        stream: _firestoreService
-                            .connectionsForUserStream(user.userId),
-                        builder: (context, connectionSnapshot) {
-                          final connectionCount =
-                              connectionSnapshot.data?.length ?? 0;
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _onConnectionCountChanged(connectionCount);
-                          });
-                          final isOnInvitesTab = _tabController.index == 2;
-                          final isOnChatsTab = _tabController.index == 1;
-                          final showInviteBadge = _inviteCount >
-                                  _lastSeenInviteCount &&
-                              !isOnInvitesTab;
-                          final showChatBadge = _connectionCount >
-                                  _lastSeenConnectionCount &&
-                              !isOnChatsTab;
+    return Consumer<UserProvider>(
+      builder: (context, userProvider, child) {
+        return UserDataGate(
+          isLoading: userProvider.isLoading,
+          error: userProvider.error,
+          user: userProvider.currentUser,
+          child: (user) {
+            return StreamBuilder<int>(
+              stream: _firestoreService.totalInviteCountStream(user.userId),
+              builder: (context, inviteSnapshot) {
+                final inviteCount = inviteSnapshot.data ?? 0;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _onInviteCountChanged(inviteCount);
+                });
+                return StreamBuilder<List<ConnectionInfo>>(
+                  stream: _firestoreService
+                      .connectionsForUserStream(user.userId),
+                  builder: (context, connectionSnapshot) {
+                    final connectionCount =
+                        connectionSnapshot.data?.length ?? 0;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _onConnectionCountChanged(connectionCount);
+                    });
+                    final isOnInvitesTab = _tabController.index == 2;
+                    final isOnChatsTab = _tabController.index == 1;
+                    final showInviteBadge = _inviteCount >
+                            _lastSeenInviteCount &&
+                        !isOnInvitesTab;
+                    final showChatBadge = _connectionCount >
+                            _lastSeenConnectionCount &&
+                        !isOnChatsTab;
 
-                          return TabBar(
-                            controller: _tabController,
-                            tabs: [
-                              const Tab(
-                                text: 'Home',
-                                icon: Icon(Icons.home),
-                              ),
-                              Tab(
-                                text: 'Chats',
-                                icon: Badge(
-                                  isLabelVisible: showChatBadge,
-                                  child: const Icon(Icons.chat),
-                                ),
-                              ),
-                              Tab(
-                                text: 'Invites',
-                                icon: Badge(
-                                  isLabelVisible: showInviteBadge,
-                                  child: const Icon(Icons.mail),
-                                ),
-                              ),
-                              const Tab(
-                                text: 'Account',
-                                icon: Icon(Icons.person),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  ),
-                  Expanded(
-                    child: TabBarView(
+                    final tabBar = _buildTabBar(showChatBadge, showInviteBadge);
+                    final tabBarView = TabBarView(
                       controller: _tabController,
                       children: [
                         HomeTab(user: user),
@@ -328,14 +306,38 @@ class _HomeScreenState extends State<HomeScreen>
                           onDeleteAccount: _handleDeleteAccount,
                         ),
                       ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      ),
+                    );
+
+                    return Scaffold(
+                      appBar: AppBar(
+                        title: const Text('JoinTheFun'),
+                        automaticallyImplyLeading: false,
+                        actions: [
+                          IconButton(
+                            icon: const Icon(Icons.logout),
+                            onPressed: _handleLogout,
+                            tooltip: 'Logout',
+                          ),
+                        ],
+                      ),
+                      body: kIsWeb
+                          ? tabBarView
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                tabBar,
+                                Expanded(child: tabBarView),
+                              ],
+                            ),
+                      bottomNavigationBar: kIsWeb ? tabBar : null,
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 }
