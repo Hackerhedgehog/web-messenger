@@ -44,7 +44,8 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<List<Message>>? _messagesSubscription;
   DateTime? _lastTypingUpdateAt;
 
-  static const int _pageSize = 10;
+  static const int _initialPageSize = 30;
+  static const int _loadMorePageSize = 10;
   static const int _typingThresholdSeconds = 5;
   static const Color _myBubbleColor = Color(0xFF1D731D);
   static const Color _otherBubbleColor = Color(0xFF2929A2);
@@ -199,14 +200,14 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadInitialMessages() async {
     final result = await _firestoreService.getMessagesPage(
       connectionId: widget.connectionInfo.connectionId,
-      limit: _pageSize,
+      limit: _initialPageSize,
     );
     if (!mounted) return;
     setState(() {
       _messages.clear();
       _messages.addAll(result.messages.reversed);
       _oldestDoc = result.oldestDoc;
-      _hasMore = result.messages.length >= _pageSize;
+      _hasMore = result.messages.length >= _initialPageSize;
     });
     _listenToMessages();
   }
@@ -217,7 +218,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final result = await _firestoreService.getMessagesPage(
       connectionId: widget.connectionInfo.connectionId,
-      limit: _pageSize,
+      limit: _loadMorePageSize,
       startAfterDoc: _oldestDoc,
     );
 
@@ -229,7 +230,7 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         _messages.insertAll(0, result.messages.reversed);
         _oldestDoc = result.oldestDoc;
-        _hasMore = result.messages.length >= _pageSize;
+        _hasMore = result.messages.length >= _loadMorePageSize;
         _listenToMessages();
       }
     });
@@ -480,24 +481,39 @@ class _ChatScreenState extends State<ChatScreen> {
                           .map((e) => e.key)
                           .toList();
 
-                      return Column(
-                        children: [
-                          Expanded(
-                            child: _buildMessagesList(
-                              otherLastSeen: null,
-                              otherUser: User(
-                                userId: '',
-                                email: '',
-                                username: widget.connectionInfo.name,
+                      return FutureBuilder<Map<String, String>>(
+                        future: _firestoreService.getUsernamesForUsers(
+                          widget.connectionInfo.participantIds,
+                        ),
+                        builder: (context, namesSnapshot) {
+                          final senderNames = <String, String>{
+                            widget.currentUser.userId:
+                                widget.currentUser.username,
+                          };
+                          if (namesSnapshot.hasData) {
+                            senderNames.addAll(namesSnapshot.data!);
+                          }
+                          return Column(
+                            children: [
+                              Expanded(
+                                child: _buildMessagesList(
+                                  otherLastSeen: null,
+                                  otherUser: User(
+                                    userId: '',
+                                    email: '',
+                                    username: widget.connectionInfo.name,
+                                  ),
+                                  senderNames: senderNames,
+                                ),
                               ),
-                            ),
-                          ),
-                          if (typingIds.isNotEmpty)
-                            _TypingIndicator(
-                              firestoreService: _firestoreService,
-                              typingUserIds: typingIds,
-                            ),
-                        ],
+                              if (typingIds.isNotEmpty)
+                                _TypingIndicator(
+                                  firestoreService: _firestoreService,
+                                  typingUserIds: typingIds,
+                                ),
+                            ],
+                          );
+                        },
                       );
                     },
                   )
@@ -531,12 +547,18 @@ class _ChatScreenState extends State<ChatScreen> {
                                   username: widget.connectionInfo.name,
                                 );
 
+                          final senderNames = <String, String>{
+                            widget.currentUser.userId:
+                                widget.currentUser.username,
+                            otherUser.userId: otherUser.username,
+                          };
                           return Column(
                             children: [
                               Expanded(
                                 child: _buildMessagesList(
                                   otherLastSeen: otherLastSeen,
                                   otherUser: otherUser,
+                                  senderNames: senderNames,
                                 ),
                               ),
                               if (otherIsTyping)
@@ -735,6 +757,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildMessagesList({
     required DateTime? otherLastSeen,
     required User otherUser,
+    Map<String, String>? senderNames,
   }) {
     if (_messages.isEmpty && !_isLoadingMore) {
       return const Center(
@@ -801,6 +824,8 @@ class _ChatScreenState extends State<ChatScreen> {
         final msg = _messages[_messages.length - 1 - messageIndex];
         final isMe = msg.senderId == widget.currentUser.userId;
         final showSeenBy = isMe && msg.id == lastSeenMessage?.id;
+        final senderLabel = senderNames?[msg.senderId] ??
+            (isMe ? widget.currentUser.username : otherUser.username);
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
@@ -810,6 +835,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 : CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  senderLabel,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.grey,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
               Align(
                 alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                 child: GestureDetector(

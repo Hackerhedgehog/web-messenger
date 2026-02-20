@@ -448,7 +448,7 @@ class FirestoreService {
   }
 
   /// Stream of connections for the Chats tab, sorted by lastMessage (newest first).
-  /// Includes both 1:1 connections and group connections.
+  /// Includes both 1:1 connections and group connections. Excludes archived.
   Stream<List<ConnectionInfo>> connectionsForUserStream(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().asyncExpand((
       userDoc,
@@ -483,6 +483,122 @@ class FirestoreService {
         (_) => _fetchAllConnectionInfos(userId, connections, groupConnections),
       );
     });
+  }
+
+  /// Stream of archived connections for the Archive tab.
+  /// Uses archived (1:1) and archivedGroups maps. Sorted by lastMessage (newest first).
+  Stream<List<ConnectionInfo>> archivedConnectionsForUserStream(String userId) {
+    return _firestore.collection('users').doc(userId).snapshots().asyncExpand((
+      userDoc,
+    ) {
+      final data = userDoc.data();
+      final archived = data?['archived'] as Map? ?? {};
+      final archivedGroups = data?['archivedGroups'] as Map? ?? {};
+
+      final connectionIds = <String>[];
+      final otherUserIds = archived.keys.map((e) => e.toString()).toList();
+      for (final o in otherUserIds) {
+        connectionIds.add(connectionIdFromUsers(userId, o));
+      }
+      connectionIds.addAll(
+        archivedGroups.keys.map((e) => e.toString()).toList(),
+      );
+
+      if (connectionIds.isEmpty) {
+        return Stream.value(<ConnectionInfo>[]);
+      }
+
+      final connectionStreams = connectionIds
+          .map((id) => _firestore.collection('connections').doc(id).snapshots())
+          .toList();
+
+      return StreamGroup.merge<Object?>([
+        Stream.value(null),
+        ...connectionStreams,
+      ]).asyncMap(
+        (_) => _fetchAllConnectionInfos(userId, archived, archivedGroups),
+      );
+    });
+  }
+
+  /// Archives a 1:1 connection: moves from connections to archived.
+  Future<void> archiveConnection({
+    required String userId,
+    required String otherUserId,
+  }) async {
+    try {
+      final now = FieldValue.serverTimestamp();
+      final userRef = _firestore.collection('users').doc(userId);
+      await _firestore.runTransaction((transaction) async {
+        transaction.update(userRef, {
+          'connections.$otherUserId': FieldValue.delete(),
+          'archived.$otherUserId': now,
+          'updatedAt': now,
+        });
+      });
+    } catch (e) {
+      throw 'Failed to archive connection: $e';
+    }
+  }
+
+  /// Unarchives a 1:1 connection: moves from archived to connections.
+  Future<void> unarchiveConnection({
+    required String userId,
+    required String otherUserId,
+  }) async {
+    try {
+      final now = FieldValue.serverTimestamp();
+      final userRef = _firestore.collection('users').doc(userId);
+      await _firestore.runTransaction((transaction) async {
+        transaction.update(userRef, {
+          'archived.$otherUserId': FieldValue.delete(),
+          'connections.$otherUserId': now,
+          'updatedAt': now,
+        });
+      });
+    } catch (e) {
+      throw 'Failed to unarchive connection: $e';
+    }
+  }
+
+  /// Archives a group connection: moves from groupConnections to archivedGroups.
+  Future<void> archiveGroupConnection({
+    required String userId,
+    required String groupId,
+  }) async {
+    try {
+      final now = FieldValue.serverTimestamp();
+      final userRef = _firestore.collection('users').doc(userId);
+      await _firestore.runTransaction((transaction) async {
+        transaction.update(userRef, {
+          'groupConnections.$groupId': FieldValue.delete(),
+          'archivedGroups.$groupId': now,
+          'updatedAt': now,
+        });
+      });
+    } catch (e) {
+      throw 'Failed to archive group: $e';
+    }
+  }
+
+  /// Unarchives a group connection: moves from archivedGroups to groupConnections.
+  Future<void> unarchiveGroupConnection({
+    required String userId,
+    required String groupId,
+  }) async {
+    try {
+      final now = FieldValue.serverTimestamp();
+      final userRef = _firestore.collection('users').doc(userId);
+      await _firestore.runTransaction((transaction) async {
+        transaction.update(userRef, {
+          'archivedGroups.$groupId': FieldValue.delete(),
+          'groupConnections.$groupId': now,
+          'updatedAt': now,
+        });
+      });
+    } catch (e) {
+      throw 'Failed to unarchive group: $e';
+    }
   }
 
   Future<List<ConnectionInfo>> _fetchAllConnectionInfos(
@@ -637,6 +753,9 @@ class FirestoreService {
       final now = FieldValue.serverTimestamp();
       final connectionRef = _firestore.collection('connections').doc(groupId);
 
+      final creatorUserRef =
+          _firestore.collection('users').doc(creatorUserId);
+
       await _firestore.runTransaction((transaction) async {
         transaction.set(connectionRef, {
           'name': name.trim(),
@@ -648,17 +767,15 @@ class FirestoreService {
           connectionRef.collection('participants').doc(creatorUserId),
           {'lastSeen': now},
         );
-        transaction.set(
-          _firestore.collection('users').doc(creatorUserId),
-          {'groupConnections.$groupId': now, 'updatedAt': now},
-          SetOptions(merge: true),
-        );
+        transaction.update(creatorUserRef, {
+          'groupConnections.$groupId': now,
+          'updatedAt': now,
+        });
         for (final receiverId in selectedUserIds) {
-          transaction.update(
-            _firestore.collection('users').doc(receiverId),
-            {'invites.$groupId': now, 'updatedAt': now},
-            //SetOptions(merge: true),
-          );
+          transaction.update(_firestore.collection('users').doc(receiverId), {
+            'invites.$groupId': now,
+            'updatedAt': now,
+          });
         }
       });
 
@@ -1011,12 +1128,15 @@ class FirestoreService {
       if (mediaUrl != null && mediaPath != null && mediaType != null) {
         data['mediaUrl'] = mediaUrl;
         data['mediaPath'] = mediaPath;
-        data['mediaType'] = mediaType == MessageMediaType.image ? 'image' : 'video';
+        data['mediaType'] = mediaType == MessageMediaType.image
+            ? 'image'
+            : 'video';
       }
 
       await _firestore.runTransaction((transaction) async {
-        final messageRef =
-            messageId != null ? messagesRef.doc(messageId) : messagesRef.doc();
+        final messageRef = messageId != null
+            ? messagesRef.doc(messageId)
+            : messagesRef.doc();
         transaction.set(messageRef, data);
         transaction.update(connectionRef, {
           'lastMessage': now,
@@ -1066,8 +1186,9 @@ class FirestoreService {
       if (newMediaUrl != null && newMediaPath != null && newMediaType != null) {
         data['mediaUrl'] = newMediaUrl;
         data['mediaPath'] = newMediaPath;
-        data['mediaType'] =
-            newMediaType == MessageMediaType.image ? 'image' : 'video';
+        data['mediaType'] = newMediaType == MessageMediaType.image
+            ? 'image'
+            : 'video';
       } else if (oldMediaPath != null) {
         data['mediaUrl'] = FieldValue.delete();
         data['mediaPath'] = FieldValue.delete();

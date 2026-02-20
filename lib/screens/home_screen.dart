@@ -10,6 +10,7 @@ import '../services/storage_service.dart';
 import '../widgets/reauthenticate_dialog.dart';
 import '../widgets/user_data_gate.dart';
 import 'account_tab.dart';
+import 'archive_tab.dart';
 import 'chats_tab.dart';
 import 'home_tab.dart';
 import 'invites_tab.dart';
@@ -37,7 +38,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(_onTabChanged);
   }
 
@@ -45,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (_tabController.index == 1) {
       _lastSeenConnectionCount = _connectionCount;
-    } else if (_tabController.index == 2) {
+    } else if (_tabController.index == 3) {
       _lastSeenInviteCount = _inviteCount;
     }
     setState(() {});
@@ -247,6 +248,7 @@ class _HomeScreenState extends State<HomeScreen>
             child: const Icon(Icons.chat),
           ),
         ),
+        const Tab(text: 'Archive', icon: Icon(Icons.archive)),
         Tab(
           text: 'Invites',
           icon: Badge(
@@ -284,7 +286,7 @@ class _HomeScreenState extends State<HomeScreen>
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       _onConnectionCountChanged(connectionCount);
                     });
-                    final isOnInvitesTab = _tabController.index == 2;
+                    final isOnInvitesTab = _tabController.index == 3;
                     final isOnChatsTab = _tabController.index == 1;
                     final showInviteBadge = _inviteCount >
                             _lastSeenInviteCount &&
@@ -299,6 +301,7 @@ class _HomeScreenState extends State<HomeScreen>
                       children: [
                         HomeTab(user: user),
                         ChatsTab(user: user),
+                        ArchiveTab(user: user),
                         InvitesTab(user: user),
                         AccountTab(
                           user: user,

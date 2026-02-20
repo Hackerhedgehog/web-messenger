@@ -13,6 +13,44 @@ class ChatsTab extends StatelessWidget {
 
   final User user;
 
+  static Future<void> _archiveChat(
+    BuildContext context,
+    FirestoreService firestoreService,
+    String currentUserId,
+    ConnectionInfo conn,
+  ) async {
+    try {
+      if (conn.isGroup) {
+        await firestoreService.archiveGroupConnection(
+          userId: currentUserId,
+          groupId: conn.connectionId,
+        );
+      } else {
+        await firestoreService.archiveConnection(
+          userId: currentUserId,
+          otherUserId: conn.otherUserId,
+        );
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Chat archived'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to archive: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _showRemoveConnectionDialog(
     BuildContext context,
     FirestoreService firestoreService,
@@ -118,6 +156,12 @@ class ChatsTab extends StatelessWidget {
                             user.userId,
                             conn.otherUserId,
                           ),
+                  onArchive: () => _archiveChat(
+                    context,
+                    firestoreService,
+                    user.userId,
+                    conn,
+                  ),
                 );
               },
             ),
@@ -150,20 +194,46 @@ class _ConnectionTile extends StatelessWidget {
     required this.connectionInfo,
     required this.firestoreService,
     required this.onRemoveConnection,
+    required this.onArchive,
   });
 
   final User currentUser;
   final ConnectionInfo connectionInfo;
   final FirestoreService firestoreService;
   final VoidCallback? onRemoveConnection;
+  final VoidCallback? onArchive;
 
   void _showContextMenu(BuildContext context) {
     if (connectionInfo.isGroup) {
-      _showGroupParticipants(context);
+      showModalBottomSheet<void>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.people),
+                title: const Text('View participants'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showGroupParticipants(context);
+                },
+              ),
+              if (onArchive != null)
+                ListTile(
+                  leading: const Icon(Icons.archive),
+                  title: const Text('Archive'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onArchive!();
+                  },
+                ),
+            ],
+          ),
+        ),
+      );
       return;
     }
-    if (onRemoveConnection == null) return;
-
     showModalBottomSheet<void>(
       context: context,
       builder: (context) => SafeArea(
@@ -178,14 +248,24 @@ class _ConnectionTile extends StatelessWidget {
                 _showOtherUserProfile(context);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.link_off, color: Colors.red),
-              title: const Text('Remove connection', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Navigator.pop(context);
-                onRemoveConnection!();
-              },
-            ),
+            if (onArchive != null)
+              ListTile(
+                leading: const Icon(Icons.archive),
+                title: const Text('Archive'),
+                onTap: () {
+                  Navigator.pop(context);
+                  onArchive!();
+                },
+              ),
+            if (onRemoveConnection != null)
+              ListTile(
+                leading: const Icon(Icons.link_off, color: Colors.red),
+                title: const Text('Remove connection', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(context);
+                  onRemoveConnection!();
+                },
+              ),
           ],
         ),
       ),
@@ -327,7 +407,7 @@ class _ConnectionTile extends StatelessWidget {
           ),
         );
       },
-      onLongPress: onRemoveConnection != null ? () => _showContextMenu(context) : null,
+      onLongPress: () => _showContextMenu(context),
       child: Card(
         child: ListTile(
           leading: const CircleAvatar(
