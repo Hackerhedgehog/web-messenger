@@ -1,9 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
 class AuthService {
-  /// Set to true to require email verification before sign-in.
-  static const bool requireEmailVerification = false;
-
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // Get current user
@@ -14,28 +11,20 @@ class AuthService {
   Stream<User?> get authStateChanges =>
       _authStateChanges ??= _auth.authStateChanges();
 
-  // Sign in with email and password. Rejects if the user's email is not verified.
+  // Sign in with email and password. Always allows sign-in; show email
+  // verification status to the user after login (e.g. via snackbar).
   Future<UserCredential?> signInWithEmailAndPassword({
     required String email,
     required String password,
   }) async {
     try {
-      final credential = await _auth.signInWithEmailAndPassword(
+      return await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
-      final user = credential.user;
-      if (requireEmailVerification &&
-          user != null &&
-          !user.emailVerified) {
-        await _auth.signOut();
-        throw 'Please verify your email before signing in. Check your inbox for the verification link.';
-      }
-      return credential;
     } on FirebaseAuthException catch (e) {
       throw _handleAuthException(e);
     } catch (e) {
-      if (e.toString().startsWith('Please verify your email')) rethrow;
       throw 'An unexpected error occurred. Please try again.';
     }
   }
@@ -51,9 +40,7 @@ class AuthService {
         password: password,
       );
       final user = credential.user;
-      if (requireEmailVerification &&
-          user != null &&
-          !user.emailVerified) {
+      if (user != null && !user.emailVerified) {
         await user.sendEmailVerification();
       }
       return credential;

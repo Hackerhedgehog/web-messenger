@@ -14,6 +14,7 @@ import '../services/storage_service.dart';
 import '../widgets/media_message_content.dart';
 import '../widgets/profile_avatar.dart';
 import '../widgets/profile_popup.dart';
+import 'chat_search_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -43,13 +44,20 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isSending = false;
   StreamSubscription<List<Message>>? _messagesSubscription;
   DateTime? _lastTypingUpdateAt;
+  String? _scrollToMessageId;
+  GlobalKey? _scrollToMessageKey;
+  String? _highlightMessageId;
+  Timer? _highlightTimer;
 
   static const int _initialPageSize = 30;
   static const int _loadMorePageSize = 10;
+  static const double _estimatedMessageTileHeight = 100;
   static const int _typingThresholdSeconds = 5;
+  static const Duration _searchHighlightDuration = Duration(seconds: 5);
   static const Color _myBubbleColor = Color(0xFF1D731D);
   static const Color _otherBubbleColor = Color(0xFF2929A2);
   static const Color _bubbleTextColor = Color(0xFFF0F8FF);
+  static const Color _highlightBorderColor = Color(0xFFFFC107);
 
   Timer? _typingCheckTimer;
 
@@ -74,6 +82,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _typingCheckTimer?.cancel();
+    _highlightTimer?.cancel();
     _messagesSubscription?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -234,6 +243,115 @@ class _ChatScreenState extends State<ChatScreen> {
         _listenToMessages();
       }
     });
+  }
+
+  /// Applies messages from search result and scrolls to the tapped message.
+  void _applySearchResultAndScroll(SearchResult result) {
+    if (result.allFetchedMessages.isEmpty) {
+      _scrollToMessage(result.message);
+      return;
+    }
+    final ids = <String>{};
+    final merged = <Message>[];
+    for (final m in _messages) {
+      if (ids.add(m.id)) merged.add(m);
+    }
+    for (final m in result.allFetchedMessages) {
+      if (ids.add(m.id)) merged.add(m);
+    }
+    merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    setState(() {
+      _messages
+        ..clear()
+        ..addAll(merged);
+      if (result.oldestDoc != null) {
+        _oldestDoc = result.oldestDoc;
+        _hasMore = true;
+      }
+    });
+    _listenToMessages();
+    _scrollToMessage(result.message);
+  }
+
+  /// Loads more message pages until the given message is in [_messages], or no more.
+  Future<void> _loadMessagesUntilWeHave(Message message) async {
+    while (mounted &&
+        !_messages.any((m) => m.id == message.id) &&
+        _hasMore &&
+        _oldestDoc != null) {
+      final result = await _firestoreService.getMessagesPage(
+        connectionId: widget.connectionInfo.connectionId,
+        limit: _loadMorePageSize,
+        startAfterDoc: _oldestDoc,
+      );
+      if (!mounted) return;
+      setState(() {
+        _messages.insertAll(0, result.messages.reversed);
+        _oldestDoc = result.oldestDoc;
+        _hasMore = result.messages.length >= _loadMorePageSize;
+      });
+      _listenToMessages();
+    }
+  }
+
+  void _scrollToMessage(Message message) async {
+    if (!_messages.any((m) => m.id == message.id)) {
+      await _loadMessagesUntilWeHave(message);
+    }
+    if (!mounted) return;
+    final idx = _messages.indexWhere((m) => m.id == message.id);
+    if (idx < 0) return;
+    setState(() {
+      _scrollToMessageId = message.id;
+      _scrollToMessageKey = GlobalKey();
+    });
+    const maxScrollAttempts = 8;
+    var attempts = 0;
+    void tryScrollToMessage() {
+      if (!mounted || attempts > maxScrollAttempts) {
+        if (mounted) {
+          setState(() {
+            _scrollToMessageId = null;
+            _scrollToMessageKey = null;
+          });
+        }
+        return;
+      }
+      attempts++;
+      final curIdx = _messages.indexWhere((m) => m.id == message.id);
+      if (curIdx < 0) {
+        setState(() {
+          _scrollToMessageId = null;
+          _scrollToMessageKey = null;
+        });
+        return;
+      }
+      final ctx = _scrollToMessageKey?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx, alignment: 0.2);
+        _highlightTimer?.cancel();
+        _highlightTimer = Timer(_searchHighlightDuration, () {
+          if (mounted) setState(() => _highlightMessageId = null);
+        });
+        setState(() {
+          _highlightMessageId = message.id;
+          _scrollToMessageId = null;
+          _scrollToMessageKey = null;
+        });
+        return;
+      }
+      final scrollPosition = _scrollController.position;
+      if (scrollPosition.hasContentDimensions) {
+        final listIndex = _messages.length - 1 - curIdx;
+        final sendingOffset = _isSending ? 1 : 0;
+        final offset = (listIndex + sendingOffset) * _estimatedMessageTileHeight;
+        _scrollController.jumpTo(
+          offset.clamp(0.0, scrollPosition.maxScrollExtent),
+        );
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) => tryScrollToMessage());
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => tryScrollToMessage());
   }
 
   Future<void> _sendMessage() async {
@@ -462,6 +580,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () async {
+              final result = await Navigator.of(context).push<SearchResult>(
+                MaterialPageRoute(
+                  builder: (context) => ChatSearchScreen(
+                    currentUser: widget.currentUser,
+                    connectionInfo: widget.connectionInfo,
+                  ),
+                ),
+              );
+              if (result != null && mounted) {
+                _applySearchResultAndScroll(result);
+              }
+            },
+            tooltip: 'Search in chat',
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -826,8 +963,10 @@ class _ChatScreenState extends State<ChatScreen> {
         final showSeenBy = isMe && msg.id == lastSeenMessage?.id;
         final senderLabel = senderNames?[msg.senderId] ??
             (isMe ? widget.currentUser.username : otherUser.username);
+        final useScrollKey = _scrollToMessageId != null && msg.id == _scrollToMessageId;
+        final isHighlighted = _highlightMessageId != null && msg.id == _highlightMessageId;
 
-        return Padding(
+        Widget tile = Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Column(
             crossAxisAlignment: isMe
@@ -867,6 +1006,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         bottomLeft: Radius.circular(isMe ? 18 : 4),
                         bottomRight: Radius.circular(isMe ? 4 : 18),
                       ),
+                      border: isHighlighted
+                          ? Border.all(
+                              color: _highlightBorderColor,
+                              width: 3,
+                            )
+                          : null,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -924,6 +1069,10 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
         );
+        if (useScrollKey && _scrollToMessageKey != null) {
+          tile = KeyedSubtree(key: _scrollToMessageKey!, child: tile);
+        }
+        return tile;
       },
     );
   }

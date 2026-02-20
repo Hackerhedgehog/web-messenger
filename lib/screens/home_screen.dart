@@ -40,6 +40,23 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(_onTabChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showEmailVerificationSnackBarIfNeeded());
+  }
+
+  void _showEmailVerificationSnackBarIfNeeded() {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is! bool || !mounted) return;
+    final verified = args;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          verified
+              ? 'Email verified.'
+              : 'Email not verified. Check your inbox for the verification link.',
+        ),
+        backgroundColor: verified ? Colors.green : Colors.orange,
+      ),
+    );
   }
 
   void _onTabChanged() {

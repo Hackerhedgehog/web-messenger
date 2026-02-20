@@ -41,16 +41,20 @@ class _LoginScreenState extends State<LoginScreen> {
         );
 
         if (mounted && userCredential?.user != null) {
+          final emailVerified = userCredential!.user!.emailVerified;
           // Load user data from Firestore
           final userProvider = Provider.of<UserProvider>(
             context,
             listen: false,
           );
-          userProvider.listenToUserProfile(userCredential!.user!.uid);
+          userProvider.listenToUserProfile(userCredential.user!.uid);
 
           if (mounted) {
             Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (context) => const HomeScreen()),
+              MaterialPageRoute(
+                builder: (context) => const HomeScreen(),
+                settings: RouteSettings(arguments: emailVerified),
+              ),
               (route) => false,
             );
           }
