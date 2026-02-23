@@ -44,9 +44,13 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _showEmailVerificationSnackBarIfNeeded() {
-    final args = ModalRoute.of(context)?.settings.arguments;
-    if (args is! bool || !mounted) return;
-    final verified = args;
+    if (!mounted) return;
+    bool? verified = ModalRoute.of(context)?.settings.arguments as bool?;
+    if (verified == null) {
+      verified = Provider.of<UserProvider>(context, listen: false)
+          .takePendingEmailVerificationSnackBar();
+    }
+    if (verified == null || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(

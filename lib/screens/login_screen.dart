@@ -42,11 +42,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
         if (mounted && userCredential?.user != null) {
           final emailVerified = userCredential!.user!.emailVerified;
-          // Load user data from Firestore
           final userProvider = Provider.of<UserProvider>(
             context,
             listen: false,
           );
+          userProvider.setPendingEmailVerificationSnackBar(emailVerified);
           userProvider.listenToUserProfile(userCredential.user!.uid);
 
           if (mounted) {

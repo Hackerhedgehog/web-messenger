@@ -13,11 +13,27 @@ class UserProvider extends ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   StreamSubscription<Map<String, dynamic>?>? _profileSubscription;
+  bool? _pendingEmailVerificationSnackBar;
 
   User? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
   bool get isLoggedIn => _currentUser != null;
   String? get error => _error;
+
+  /// Set when user logs in so HomeScreen can show verified/not verified snackbar.
+  /// Call [takePendingEmailVerificationSnackBar] to read and clear.
+  void setPendingEmailVerificationSnackBar(bool emailVerified) {
+    _pendingEmailVerificationSnackBar = emailVerified;
+    notifyListeners();
+  }
+
+  /// Returns and clears the pending snackbar value. Null if none.
+  bool? takePendingEmailVerificationSnackBar() {
+    final value = _pendingEmailVerificationSnackBar;
+    _pendingEmailVerificationSnackBar = null;
+    if (value != null) notifyListeners();
+    return value;
+  }
 
   void _safeNotifyListeners() {
     SchedulerBinding.instance.addPostFrameCallback((_) {
