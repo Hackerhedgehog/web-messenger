@@ -921,16 +921,24 @@ class FirestoreService {
       final connectionRef = _firestore
           .collection('connections')
           .doc(connectionId);
-
-      final currentUserProfile = await getUserProfile(currentUserId);
-      final removedUserName =
-          currentUserProfile?['username'] as String? ?? currentUserId;
+      final userRef = _firestore.collection('users').doc(currentUserId);
+      final participantRef =
+          connectionRef.collection('participants').doc(currentUserId);
 
       await _firestore.runTransaction((transaction) async {
-        transaction.delete(
-          connectionRef.collection('participants').doc(currentUserId),
-        );
-        transaction.update(_firestore.collection('users').doc(currentUserId), {
+        // Read all documents we will modify (required by Firestore transactions).
+        final userSnap = await transaction.get(userRef);
+        final connectionSnap = await transaction.get(connectionRef);
+        await transaction.get(participantRef);
+
+        if (!userSnap.exists) return;
+        if (!connectionSnap.exists) return;
+
+        final removedUserName = userSnap.data()?['username'] as String? ??
+            currentUserId;
+
+        transaction.delete(participantRef);
+        transaction.update(userRef, {
           'connections.$otherUserId': FieldValue.delete(),
           'updatedAt': FieldValue.serverTimestamp(),
         });
