@@ -57,6 +57,7 @@ class ChatsTab extends StatelessWidget {
     String currentUserId,
     String otherUserId,
   ) async {
+    if (!context.mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -111,7 +112,7 @@ class ChatsTab extends StatelessWidget {
 
     return StreamBuilder<List<ConnectionInfo>>(
       stream: firestoreService.connectionsForUserStream(user.userId),
-      builder: (context, snapshot) {
+      builder: (scaffoldContext, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -120,7 +121,7 @@ class ChatsTab extends StatelessWidget {
           return Center(
             child: Text(
               'Error: ${snapshot.error}',
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+              style: TextStyle(color: Theme.of(scaffoldContext).colorScheme.error),
             ),
           );
         }
@@ -151,13 +152,13 @@ class ChatsTab extends StatelessWidget {
                   onRemoveConnection: conn.isGroup
                       ? null
                       : () => _showRemoveConnectionDialog(
-                            context,
+                            scaffoldContext,
                             firestoreService,
                             user.userId,
                             conn.otherUserId,
                           ),
                   onArchive: () => _archiveChat(
-                    context,
+                    scaffoldContext,
                     firestoreService,
                     user.userId,
                     conn,
@@ -170,7 +171,7 @@ class ChatsTab extends StatelessWidget {
               bottom: 16,
               child: FloatingActionButton(
                 onPressed: () {
-                  Navigator.of(context).push(
+                  Navigator.of(scaffoldContext).push(
                     MaterialPageRoute(
                       builder: (context) => ChooseParticipantsScreen(
                         currentUser: user,

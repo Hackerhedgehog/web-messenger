@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' show FirebaseAuthException;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -295,17 +296,33 @@ class _AccountTabState extends State<AccountTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Verification email sent to $newEmail. '
-              'Click the link in that email to complete the change.',
+              'Verification email sent to $newEmail. Click the link there to '
+              'complete the change. You can keep using the app in the meantime.',
             ),
             backgroundColor: Colors.green,
           ),
         );
       }
     } catch (e) {
+      final isEmailInUse = e is FirebaseAuthException &&
+          e.code == 'email-already-in-use';
       final errorString = e.toString();
-      if (errorString == 'requires-recent-login' ||
-          errorString.contains('requires-recent-login')) {
+      final needsReauth = errorString == 'requires-recent-login' ||
+          errorString.contains('requires-recent-login');
+
+      if (isEmailInUse && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This email is already in use by another account.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      if (needsReauth) {
         if (!mounted) return;
         final password = await showReauthenticateDialog(
           context,
@@ -321,15 +338,26 @@ class _AccountTabState extends State<AccountTab> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Verification email sent to $newEmail. '
-                  'Click the link in that email to complete the change.',
+                  'Verification email sent to $newEmail. Click the link there to '
+                  'complete the change. You can keep using the app in the meantime.',
                 ),
                 backgroundColor: Colors.green,
               ),
             );
           }
         } catch (reauthError) {
-          if (mounted) {
+          final reauthEmailInUse = reauthError is FirebaseAuthException &&
+              reauthError.code == 'email-already-in-use';
+          if (reauthEmailInUse && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'This email is already in use by another account.',
+                ),
+                backgroundColor: Colors.red,
+              ),
+            );
+          } else if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('Failed to update email: $reauthError'),
@@ -338,15 +366,13 @@ class _AccountTabState extends State<AccountTab> {
             );
           }
         }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to update email: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update email: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSavingEmail = false);

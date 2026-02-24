@@ -40,16 +40,18 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(_onTabChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showEmailVerificationSnackBarIfNeeded());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _showEmailVerificationSnackBarIfNeeded(),
+    );
   }
 
   void _showEmailVerificationSnackBarIfNeeded() {
     if (!mounted) return;
     bool? verified = ModalRoute.of(context)?.settings.arguments as bool?;
-    if (verified == null) {
-      verified = Provider.of<UserProvider>(context, listen: false)
-          .takePendingEmailVerificationSnackBar();
-    }
+    verified ??= Provider.of<UserProvider>(
+      context,
+      listen: false,
+    ).takePendingEmailVerificationSnackBar();
     if (verified == null || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -152,8 +154,7 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final userProvider = Provider.of<UserProvider>(context, listen: false);
       final userId = userProvider.currentUser?.userId;
-      final profilePictureUrl =
-          userProvider.currentUser?.profilePictureUrl;
+      final profilePictureUrl = userProvider.currentUser?.profilePictureUrl;
 
       if (userId == null) {
         throw 'No user data available';
@@ -299,8 +300,9 @@ class _HomeScreenState extends State<HomeScreen>
                   _onInviteCountChanged(inviteCount);
                 });
                 return StreamBuilder<List<ConnectionInfo>>(
-                  stream: _firestoreService
-                      .connectionsForUserStream(user.userId),
+                  stream: _firestoreService.connectionsForUserStream(
+                    user.userId,
+                  ),
                   builder: (context, connectionSnapshot) {
                     final connectionCount =
                         connectionSnapshot.data?.length ?? 0;
@@ -309,11 +311,10 @@ class _HomeScreenState extends State<HomeScreen>
                     });
                     final isOnInvitesTab = _tabController.index == 3;
                     final isOnChatsTab = _tabController.index == 1;
-                    final showInviteBadge = _inviteCount >
-                            _lastSeenInviteCount &&
-                        !isOnInvitesTab;
-                    final showChatBadge = _connectionCount >
-                            _lastSeenConnectionCount &&
+                    final showInviteBadge =
+                        _inviteCount > _lastSeenInviteCount && !isOnInvitesTab;
+                    final showChatBadge =
+                        _connectionCount > _lastSeenConnectionCount &&
                         !isOnChatsTab;
 
                     final tabBar = _buildTabBar(showChatBadge, showInviteBadge);
@@ -334,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen>
 
                     return Scaffold(
                       appBar: AppBar(
-                        title: const Text('JoinTheFun'),
+                        title: const Text('Mobile Messenger'),
                         automaticallyImplyLeading: false,
                         actions: [
                           IconButton(
