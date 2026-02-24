@@ -335,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen>
 
                     return Scaffold(
                       appBar: AppBar(
-                        title: const Text('JoinTheFun'),
+                        title: const Text('Mobile Messenger'),
                         automaticallyImplyLeading: false,
                         actions: [
                           IconButton(
