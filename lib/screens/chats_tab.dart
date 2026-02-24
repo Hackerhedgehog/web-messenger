@@ -106,6 +106,62 @@ class ChatsTab extends StatelessWidget {
     }
   }
 
+  static Future<void> _showLeaveGroupDialog(
+    BuildContext context,
+    FirestoreService firestoreService,
+    String currentUserId,
+    String groupConnectionId,
+    String groupName,
+  ) async {
+    if (!context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Leave group'),
+        content: Text(
+          'Leave "$groupName"? You will no longer see this group chat.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Leave group'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      await firestoreService.removeUserFromGroup(
+        userId: currentUserId,
+        groupConnectionId: groupConnectionId,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Left group'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to leave group: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final firestoreService = FirestoreService();
@@ -157,6 +213,15 @@ class ChatsTab extends StatelessWidget {
                             user.userId,
                             conn.otherUserId,
                           ),
+                  onLeaveGroup: conn.isGroup
+                      ? () => _showLeaveGroupDialog(
+                            scaffoldContext,
+                            firestoreService,
+                            user.userId,
+                            conn.connectionId,
+                            conn.name,
+                          )
+                      : null,
                   onArchive: () => _archiveChat(
                     scaffoldContext,
                     firestoreService,
@@ -195,6 +260,7 @@ class _ConnectionTile extends StatelessWidget {
     required this.connectionInfo,
     required this.firestoreService,
     required this.onRemoveConnection,
+    required this.onLeaveGroup,
     required this.onArchive,
   });
 
@@ -202,6 +268,7 @@ class _ConnectionTile extends StatelessWidget {
   final ConnectionInfo connectionInfo;
   final FirestoreService firestoreService;
   final VoidCallback? onRemoveConnection;
+  final VoidCallback? onLeaveGroup;
   final VoidCallback? onArchive;
 
   void _showContextMenu(BuildContext context) {
@@ -227,6 +294,15 @@ class _ConnectionTile extends StatelessWidget {
                   onTap: () {
                     Navigator.pop(context);
                     onArchive!();
+                  },
+                ),
+              if (onLeaveGroup != null)
+                ListTile(
+                  leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                  title: const Text('Leave group', style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onLeaveGroup!();
                   },
                 ),
             ],
