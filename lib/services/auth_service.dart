@@ -92,8 +92,9 @@ class AuthService {
     }
   }
 
-  // Update user email. Sends verification email to new address; email updates after user clicks link.
-  // Throws 'requires-recent-login' if re-authentication is needed.
+  // Sends a verification email to the new address; email updates after user clicks the link.
+  // App use is allowed regardless. Throws 'requires-recent-login' if re-authentication is needed.
+  // Throws FirebaseAuthException with code 'email-already-in-use' if the email is taken.
   Future<void> updateEmail(String newEmail) async {
     try {
       final user = _auth.currentUser;
@@ -105,6 +106,7 @@ class AuthService {
       if (e.code == 'requires-recent-login') {
         throw 'requires-recent-login';
       }
+      if (e.code == 'email-already-in-use') rethrow;
       throw _handleAuthException(e);
     } catch (e) {
       if (e.toString() == 'requires-recent-login') rethrow;
