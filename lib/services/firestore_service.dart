@@ -1120,6 +1120,8 @@ class FirestoreService {
     String? mediaUrl,
     String? mediaPath,
     MessageMediaType? mediaType,
+    String? thumbnailUrl,
+    String? thumbnailPath,
   }) async {
     try {
       final connectionRef = _firestore
@@ -1139,6 +1141,10 @@ class FirestoreService {
         data['mediaType'] = mediaType == MessageMediaType.image
             ? 'image'
             : 'video';
+        if (thumbnailUrl != null && thumbnailPath != null) {
+          data['thumbnailUrl'] = thumbnailUrl;
+          data['thumbnailPath'] = thumbnailPath;
+        }
       }
 
       await _firestore.runTransaction((transaction) async {

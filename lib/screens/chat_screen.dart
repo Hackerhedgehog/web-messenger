@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
+import '../utils/video_thumbnail_generator.dart';
 
 import '../models/connection_info.dart';
 import '../models/message_model.dart';
@@ -393,7 +396,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       String? filename;
-      List<int>? bytes;
+      Uint8List? bytes;
       XFile? xFile;
 
       if (kIsWeb) {
@@ -489,6 +492,29 @@ class _ChatScreenState extends State<ChatScreen> {
               messageId: messageId,
             );
 
+      String? thumbnailUrl;
+      String? thumbnailPath;
+      if (mediaType == MessageMediaType.video) {
+        try {
+          final thumbBytes = await captureVideoFirstFrame(
+            localPath: kIsWeb ? null : xFile?.path,
+            bytes: kIsWeb ? bytes : null,
+            filename: filename,
+          );
+          if (thumbBytes != null) {
+            final thumbResult = await _storageService.uploadVideoThumbnail(
+              bytes: thumbBytes,
+              connectionId: connectionId,
+              messageId: messageId,
+            );
+            thumbnailUrl = thumbResult.url;
+            thumbnailPath = thumbResult.path;
+          }
+        } catch (_) {
+          // Proceed without thumbnail
+        }
+      }
+
       final caption = _textController.text.trim();
       _textController.clear();
 
@@ -500,6 +526,8 @@ class _ChatScreenState extends State<ChatScreen> {
         mediaUrl: uploadResult.url,
         mediaPath: uploadResult.path,
         mediaType: mediaType,
+        thumbnailUrl: thumbnailUrl,
+        thumbnailPath: thumbnailPath,
       );
 
       if (mounted) setState(() => _isSending = false);
@@ -1023,6 +1051,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: MediaMessageContent(
                               mediaUrl: msg.mediaUrl!,
                               mediaType: msg.mediaType!,
+                              thumbnailUrl: msg.thumbnailUrl,
                             ),
                           ),
                         if (msg.text.isNotEmpty)

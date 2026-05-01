@@ -32,6 +32,8 @@ class Message {
     this.mediaUrl,
     this.mediaPath,
     this.mediaType,
+    this.thumbnailUrl,
+    this.thumbnailPath,
   });
 
   final String id;
@@ -43,6 +45,10 @@ class Message {
   /// Storage path for media, used when deleting unreferenced files.
   final String? mediaPath;
   final MessageMediaType? mediaType;
+  /// Download URL for video thumbnail JPEG in Firebase Storage.
+  final String? thumbnailUrl;
+  /// Storage path for the thumbnail, for cleanup when the message is deleted.
+  final String? thumbnailPath;
 
   bool get hasMedia => mediaUrl != null && mediaUrl!.isNotEmpty;
 
@@ -54,6 +60,8 @@ class Message {
     String? mediaUrl,
     String? mediaPath,
     MessageMediaType? mediaType,
+    String? thumbnailUrl,
+    String? thumbnailPath,
     bool clearMedia = false,
   }) {
     return Message(
@@ -64,6 +72,8 @@ class Message {
       mediaUrl: clearMedia ? null : (mediaUrl ?? this.mediaUrl),
       mediaPath: clearMedia ? null : (mediaPath ?? this.mediaPath),
       mediaType: clearMedia ? null : (mediaType ?? this.mediaType),
+      thumbnailUrl: clearMedia ? null : (thumbnailUrl ?? this.thumbnailUrl),
+      thumbnailPath: clearMedia ? null : (thumbnailPath ?? this.thumbnailPath),
     );
   }
 
@@ -87,6 +97,8 @@ class Message {
       mediaUrl: data['mediaUrl'] as String?,
       mediaPath: data['mediaPath'] as String?,
       mediaType: mediaType,
+      thumbnailUrl: data['thumbnailUrl'] as String?,
+      thumbnailPath: data['thumbnailPath'] as String?,
     );
   }
 }

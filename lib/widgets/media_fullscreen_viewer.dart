@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../models/message_model.dart';
+import 'firebase_storage_image.dart';
 
 /// Full-screen overlay for viewing media (image or video).
 class MediaFullscreenViewer extends StatefulWidget {
@@ -55,10 +56,10 @@ class _MediaFullscreenViewerState extends State<MediaFullscreenViewer> {
                 ? InteractiveViewer(
                     minScale: 0.5,
                     maxScale: 4.0,
-                    child: Image.network(
-                      widget.mediaUrl,
+                    child: FirebaseStorageImage(
+                      imageUrl: widget.mediaUrl,
                       fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Icon(
+                      errorBuilder: (_) => const Icon(
                         Icons.broken_image,
                         size: 64,
                         color: Colors.white54,

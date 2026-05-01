@@ -151,6 +151,20 @@ class StorageService {
     return (url: url, path: path);
   }
 
+  /// Uploads a video thumbnail JPEG to Firebase Storage.
+  /// Path: connections/{connectionId}/messages/{messageId}/thumbnail.jpg
+  Future<({String url, String path})> uploadVideoThumbnail({
+    required Uint8List bytes,
+    required String connectionId,
+    required String messageId,
+  }) async {
+    final path = 'connections/$connectionId/messages/$messageId/thumbnail.jpg';
+    final ref = _storage.ref().child(path);
+    await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+    final url = await ref.getDownloadURL();
+    return (url: url, path: path);
+  }
+
   /// Deletes message media from Storage by its path.
   /// Silently ignores errors (e.g. file not found).
   Future<void> deleteMessageMediaByPath(String? path) async {

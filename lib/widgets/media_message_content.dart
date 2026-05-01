@@ -1,69 +1,33 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/message_model.dart';
+import 'firebase_storage_image.dart';
 import 'media_fullscreen_viewer.dart';
 
 /// Displays media (image or video) inside a message bubble.
-/// Videos show first-frame thumbnail with play icon. Tapping opens full-screen viewer.
-class MediaMessageContent extends StatefulWidget {
+/// Videos show a pre-generated thumbnail with a play icon. Tapping opens the full-screen viewer.
+class MediaMessageContent extends StatelessWidget {
   const MediaMessageContent({
     super.key,
     required this.mediaUrl,
     required this.mediaType,
+    this.thumbnailUrl,
     this.maxWidth = 240,
     this.maxHeight = 200,
   });
 
   final String mediaUrl;
   final MessageMediaType mediaType;
+  final String? thumbnailUrl;
   final double maxWidth;
   final double maxHeight;
 
-  @override
-  State<MediaMessageContent> createState() => _MediaMessageContentState();
-}
-
-class _MediaMessageContentState extends State<MediaMessageContent> {
-  Uint8List? _videoThumbnailBytes;
-  bool _thumbnailFailed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.mediaType == MessageMediaType.video) {
-      _loadVideoThumbnail();
-    }
-  }
-
-  Future<void> _loadVideoThumbnail() async {
-    try {
-      final bytes = await VideoThumbnail.thumbnailData(
-        video: widget.mediaUrl,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 480,
-        quality: 75,
-      );
-      if (mounted) {
-        setState(() {
-          _videoThumbnailBytes = bytes;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _thumbnailFailed = true);
-      }
-    }
-  }
-
-  void _openFullScreen() {
+  void _openFullScreen(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => MediaFullscreenViewer(
-          mediaUrl: widget.mediaUrl,
-          mediaType: widget.mediaType,
+          mediaUrl: mediaUrl,
+          mediaType: mediaType,
         ),
       ),
     );
@@ -72,17 +36,19 @@ class _MediaMessageContentState extends State<MediaMessageContent> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: _openFullScreen,
+      onTap: () => _openFullScreen(context),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: SizedBox(
-          width: widget.maxWidth,
-          height: widget.maxHeight,
-          child: widget.mediaType == MessageMediaType.image
-              ? Image.network(
-                  widget.mediaUrl,
+          width: maxWidth,
+          height: maxHeight,
+          child: mediaType == MessageMediaType.image
+              ? FirebaseStorageImage(
+                  imageUrl: mediaUrl,
+                  width: maxWidth,
+                  height: maxHeight,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
+                  errorBuilder: (_) => Container(
                     color: Colors.grey[800],
                     child: const Icon(
                       Icons.broken_image,
@@ -98,27 +64,17 @@ class _MediaMessageContentState extends State<MediaMessageContent> {
   }
 
   Widget _buildVideoThumbnail() {
-    if (_videoThumbnailBytes == null && !_thumbnailFailed) {
-      return Container(
-        color: Colors.grey[800],
-        child: const Center(
-          child: CircularProgressIndicator(
-            color: Colors.white54,
-            strokeWidth: 2,
-          ),
-        ),
-      );
-    }
     return Stack(
       alignment: Alignment.center,
       fit: StackFit.expand,
       children: [
-        if (_videoThumbnailBytes != null)
-          Image.memory(
-            _videoThumbnailBytes!,
+        if (thumbnailUrl != null)
+          FirebaseStorageImage(
+            imageUrl: thumbnailUrl!,
+            width: maxWidth,
+            height: maxHeight,
             fit: BoxFit.cover,
-            width: widget.maxWidth,
-            height: widget.maxHeight,
+            errorBuilder: (_) => Container(color: Colors.grey[800]),
           )
         else
           Container(color: Colors.grey[800]),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/user_model.dart';
+import 'firebase_storage_image.dart';
 
 /// Displays a user's profile picture with fallback when the image fails to load
 /// (e.g. due to CORS on web). Use this instead of CircleAvatar +
@@ -37,12 +38,12 @@ class ProfileAvatar extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           ClipOval(
-            child: Image.network(
-              user.profilePictureUrl!,
+            child: FirebaseStorageImage(
+              imageUrl: user.profilePictureUrl!,
               width: radius * 2,
               height: radius * 2,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Image(
+              errorBuilder: (_) => Image(
                 image: const AssetImage('assets/default.png'),
                 fit: BoxFit.cover,
                 width: radius * 2,
