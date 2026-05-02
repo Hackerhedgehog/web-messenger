@@ -207,8 +207,15 @@ class _HomeScreenState extends State<HomeScreen>
             if (mounted) {
               Navigator.of(context).pop();
             }
-
-            throw 'Re-authentication failed: $reauthError';
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Re-authentication failed: $reauthError'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+            return;
           }
         } else {
           // Some other error occurred
@@ -219,23 +226,27 @@ class _HomeScreenState extends State<HomeScreen>
       // Delete profile picture from Storage and clean up Firestore (connections,
       // invites, user profile) AFTER successful Auth deletion
       final storageService = StorageService();
-      await storageService.deleteProfilePictureByUrl(profilePictureUrl);
-      await _firestoreService.deleteUserWithConnectionsCleanup(userId);
+      try {
+        await storageService.deleteProfilePictureByUrl(profilePictureUrl);
+      } catch (_) {
+        // Best-effort cleanup only.
+      }
+      try {
+        await _firestoreService.deleteUserWithConnectionsCleanup(userId);
+      } catch (_) {
+        // Best-effort cleanup only.
+      }
 
       // Clear user data
       userProvider.clearUser();
 
       if (mounted) {
-        // Close loading dialog
-        Navigator.of(context).pop();
-
-        // Navigate to login screen
+        await Navigator.of(context).maybePop();
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const LoginScreen()),
         );
-
-        // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Account deleted successfully'),
@@ -245,14 +256,16 @@ class _HomeScreenState extends State<HomeScreen>
       }
     } catch (e) {
       if (mounted) {
-        // Close loading dialog if still open
-        Navigator.of(context).pop();
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error deleting account: $e'),
-            backgroundColor: Colors.red,
-          ),
+        await Navigator.of(context).maybePop();
+        final userProvider = Provider.of<UserProvider>(context, listen: false);
+        userProvider.clearUser();
+        try {
+          await _authService.signOut();
+        } catch (_) {}
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const LoginScreen()),
         );
       }
     }

@@ -985,8 +985,9 @@ class FirestoreService {
   Future<void> deleteUserProfile(String userId) async {
     try {
       await _firestore.collection('users').doc(userId).delete();
-    } catch (e) {
-      throw 'Failed to delete user profile: $e';
+    } catch (_) {
+      // Best-effort cleanup for account deletion flow.
+      // If the document is already deleted or inaccessible, continue.
     }
   }
 
@@ -1000,7 +1001,11 @@ class FirestoreService {
     if (connections is Map) {
       final otherUserIds = connections.keys.map((e) => e.toString()).toList();
       for (final otherId in otherUserIds) {
-        await removeConnection(currentUserId: userId, otherUserId: otherId);
+        try {
+          await removeConnection(currentUserId: userId, otherUserId: otherId);
+        } catch (_) {
+          // Continue best-effort cleanup for account deletion.
+        }
       }
     }
 
@@ -1008,7 +1013,11 @@ class FirestoreService {
     if (groupConnections is Map) {
       final groupIds = groupConnections.keys.map((e) => e.toString()).toList();
       for (final groupId in groupIds) {
-        await removeUserFromGroup(userId: userId, groupConnectionId: groupId);
+        try {
+          await removeUserFromGroup(userId: userId, groupConnectionId: groupId);
+        } catch (_) {
+          // Continue best-effort cleanup for account deletion.
+        }
       }
     }
   }
@@ -1103,8 +1112,16 @@ class FirestoreService {
   /// Call after Firebase Auth user is deleted. Profile picture should be
   /// deleted separately via StorageService.
   Future<void> deleteUserWithConnectionsCleanup(String userId) async {
-    await removeUserFromAllConnections(userId);
-    await removeInvitesSentByUser(userId);
+    try {
+      await removeUserFromAllConnections(userId);
+    } catch (_) {
+      // Continue cleanup even if one stage fails.
+    }
+    try {
+      await removeInvitesSentByUser(userId);
+    } catch (_) {
+      // Continue cleanup even if one stage fails.
+    }
     await deleteUserProfile(userId);
   }
 

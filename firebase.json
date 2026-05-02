@@ -3,37 +3,20 @@
     "platforms": {
       "android": {
         "default": {
-          "projectId": "web-messenger-10d20",
-          "appId": "1:359470006752:android:cbe63cf13096f41a93ab85",
+          "projectId": "your-firebase-project-id",
+          "appId": "1:000000000000:android:replace_with_your_android_app_id",
           "fileOutput": "android/app/google-services.json"
         }
       },
       "dart": {
         "lib/firebase_options.dart": {
-          "projectId": "web-messenger-10d20",
+          "projectId": "your-firebase-project-id",
           "configurations": {
-            "android": "1:359470006752:android:cbe63cf13096f41a93ab85",
-            "ios": "1:359470006752:ios:92cb333e8bdeced493ab85",
-            "macos": "1:359470006752:ios:92cb333e8bdeced493ab85",
-            "web": "1:359470006752:web:a2c152eefef00b7e93ab85",
-            "windows": "1:359470006752:web:b501d341e19ff8da93ab85"
+            "android": "1:000000000000:android:replace_with_your_android_app_id",
+            "web": "1:000000000000:web:replace_with_your_web_app_id"
           }
         }
       }
     }
-  },
-  "hosting": {
-    "public": "build/web",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "rewrites": [
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ]
   }
 }
